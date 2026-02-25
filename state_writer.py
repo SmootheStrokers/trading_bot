@@ -1,8 +1,10 @@
 """
 state_writer.py — Writes bot state to bot_state.json for dashboard consumption.
 Call write_state() from the main scan loop after each cycle.
+Tracks starting_bankroll and computes current bankroll from trades.
 """
 
+import csv
 import json
 import logging
 from datetime import datetime, timezone
@@ -14,6 +16,53 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("state_writer")
 STATE_FILE = Path("bot_state.json")
+SESSION_START_FILE = Path("session_start.json")
+
+
+def _trades_csv_path() -> Path:
+    try:
+        from config import BotConfig
+        return Path(BotConfig().TRADE_LOG_FILE)
+    except Exception:
+        return Path("trades.csv")
+
+
+def _read_starting_bankroll(initial: float) -> float:
+    """Read starting bankroll from session file; create if missing."""
+    if not SESSION_START_FILE.exists():
+        try:
+            SESSION_START_FILE.write_text(json.dumps({
+                "starting_bankroll": initial,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            }, indent=2))
+        except Exception:
+            pass
+        return initial
+    try:
+        data = json.loads(SESSION_START_FILE.read_text())
+        return float(data.get("starting_bankroll", initial))
+    except Exception:
+        return initial
+
+
+def _compute_bankroll_from_trades(starting: float) -> float:
+    """Sum P&L from trades.csv and add to starting bankroll."""
+    trades_path = _trades_csv_path()
+    if not trades_path.exists():
+        return starting
+    try:
+        total_pnl = 0.0
+        with open(trades_path, newline="") as f:
+            for row in csv.DictReader(f):
+                pnl = row.get("pnl_usdc")
+                if pnl and str(pnl).strip():
+                    try:
+                        total_pnl += float(pnl)
+                    except (ValueError, TypeError):
+                        pass
+        return starting + total_pnl
+    except Exception:
+        return starting
 
 
 def write_state(
@@ -32,16 +81,25 @@ def write_state(
     The dashboard server reads this file every 2 seconds.
     """
     try:
+        starting_bankroll = _read_starting_bankroll(bankroll)
+        # In paper mode, derive current from trades; otherwise use passed bankroll
+        if paper_trading:
+            bankroll = _compute_bankroll_from_trades(starting_bankroll)
+
         positions_data = []
         for pos in position_manager.positions.values():
             if pos.is_open:
+                # Use live current_price from position monitor when available
+                curr_price = getattr(pos, "current_price", None)
+                if curr_price is None:
+                    curr_price = pos.entry_price
                 positions_data.append({
                     "condition_id": pos.condition_id,
                     "question": pos.question,
                     "side": pos.side.value,
                     "token_id": pos.token_id,
                     "entry_price": pos.entry_price,
-                    "current_price": pos.entry_price,  # Updated by live price fetch
+                    "current_price": curr_price,
                     "shares": pos.shares,
                     "size_usdc": pos.size_usdc,
                     "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
@@ -71,7 +129,8 @@ def write_state(
             "running": running,
             "paper_trading": paper_trading,
             "open_positions": positions_data,
-            "bankroll": bankroll,
+            "bankroll": round(bankroll, 2),
+            "starting_bankroll": round(starting_bankroll, 2),
             "uptime_seconds": uptime,
             "signal_feed": signal_feed[-50:],  # Keep last 50 evaluations (incl. strategy_name)
             "bot_activity": bot_activity,

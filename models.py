@@ -128,6 +128,7 @@ class Position:
     exit_time: Optional[datetime] = None
     pnl: Optional[float] = None
     strategy_name: str = ""          # For trades.csv "strategy" column
+    current_price: Optional[float] = None  # Live price from CLOB (for dashboard)
 
     @property
     def is_open(self) -> bool:

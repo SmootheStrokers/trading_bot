@@ -16,6 +16,7 @@ venv/
 bot.log
 trades.csv
 bot_state.json
+session_start.json
 
 # IDE
 .idea/

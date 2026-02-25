@@ -198,6 +198,12 @@
   .status-pill.stopped {
     border-color: rgba(255,58,92,0.3);
   }
+
+  .status-pill.error {
+    border-color: rgba(255,58,92,0.5);
+    color: var(--red);
+    background: var(--red-dim);
+  }
   .header-right { display: flex; align-items: center; gap: 10px; }
   .paper-badge {
     font-size: 10px; font-weight: 700; letter-spacing: 0.1em;
@@ -747,6 +753,10 @@
     </div>
     <div class="header-stats">
       <div class="hstat">
+        <div class="hstat-label">Start</div>
+        <div class="hstat-value blue" id="h-start">$—</div>
+      </div>
+      <div class="hstat">
         <div class="hstat-label">Bankroll</div>
         <div class="hstat-value blue" id="h-bankroll">$—</div>
       </div>
@@ -947,11 +957,13 @@ const WS_URL = window.WS_URL;
 let state = {
   running: false,
   bankroll: 1000,
+  starting_bankroll: 1000,
   session_pnl: 0,
   win_rate: 0,
   trades_today: 0,
   open_positions: [],
   uptime_seconds: 0,
+  balance_source: 'state',
 };
 let trades = [];
 let signalFeedItems = [];
@@ -1201,7 +1213,10 @@ function renderBotActivity(s) {
 
 // ── Render Header ─────────────────────────────────────────────────────────────
 function renderHeader(s) {
-  setText('h-bankroll', `$${s.bankroll.toFixed(2)}`);
+  const start = s.starting_bankroll ?? s.bankroll ?? 1000;
+  const curr = s.bankroll ?? 1000;
+  setText('h-start', `$${Number(start).toFixed(2)}`);
+  setText('h-bankroll', `$${Number(curr).toFixed(2)}`);
 
   const pnlEl = document.getElementById('h-pnl');
   const pnl = s.session_pnl || 0;
@@ -1222,12 +1237,16 @@ function renderHeader(s) {
     paperBadge.style.display = s.paper_trading ? 'block' : 'none';
   }
 
-  // Status pill
+  // Status pill (running | stopped | error)
   const pill = document.getElementById('status-pill');
   const txt = document.getElementById('status-text');
-  if (s.running) {
+  const st = s.status ?? (s.running ? 'running' : 'stopped');
+  if (st === 'running') {
     pill.className = 'status-pill running';
     txt.textContent = 'RUNNING';
+  } else if (st === 'error') {
+    pill.className = 'status-pill error';
+    txt.textContent = 'ERROR';
   } else {
     pill.className = 'status-pill stopped';
     txt.textContent = 'STOPPED';
@@ -1463,7 +1482,7 @@ function updateChart(tradeList) {
 
   // Equity curve chart (bankroll over time)
   if (equityChart) {
-    const startBankroll = state.bankroll - (state.session_pnl || 0);
+    const startBankroll = state.starting_bankroll ?? (state.bankroll - (state.session_pnl || 0));
     const equityLabels = [];
     const equityData = [];
     let running = startBankroll;
@@ -1563,7 +1582,7 @@ async function pollFallback() {
     ]);
 
     if (statusRes) {
-      state = statusRes;
+      state = { ...state, ...statusRes };
       renderHeader(state);
       renderPositions(state.open_positions || []);
       renderBotActivity(state);
@@ -1579,6 +1598,21 @@ async function pollFallback() {
     }
     if (logsRes?.lines) renderLogs(logsRes.lines);
   } catch(e) { /* Server not running */ }
+}
+
+// ── Balance polling (every 8s — keeps live USDC fresh) ────────────────────────
+async function pollBalance() {
+  try {
+    const res = await fetch(`${API}/api/balance`).then(r => r.json()).catch(() => null);
+    if (res && res.balance_usdc != null) {
+      state.bankroll = res.balance_usdc;
+      state.starting_bankroll = res.starting_bankroll ?? state.starting_bankroll;
+      state.session_pnl = res.session_pnl ?? state.session_pnl;
+      state.balance_source = res.source ?? 'state';
+      renderHeader(state);
+      if (equityChart) updateChart(trades);
+    }
+  } catch(e) { /* ignore */ }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1690,7 +1724,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initEquityChart();
   loadDemoData(); // Show demo immediately
   connectWS();   // Try to connect to live bot
-  setInterval(pollFallback, 5000); // Fallback polling
+  setInterval(pollFallback, 5000); // Fallback polling when WS down
+  setInterval(pollBalance, 8000);  // Balance refresh (live USDC) every 8s
   setInterval(() => {
     const secs = Math.floor((Date.now() - startTime) / 1000);
     setText('h-uptime', formatDuration(secs));

@@ -10,9 +10,39 @@ Deploy the bot to a non-US VM (e.g. Google Cloud Frankfurt) to access the Binanc
 
 ## Prerequisites
 
-1. SSH access to the VM (key-based auth)
+1. **SSH access to the VM (key-based auth)** — See [SSH Key Setup (Windows)](#ssh-key-setup-windows) below
 2. Your bot repo pushed to GitHub/GitLab (private or public)
 3. GCP firewall: allow SSH (22) from your IP
+
+### SSH Key Setup (Windows)
+
+1. **Generate key** (if you don't have one):
+   ```powershell
+   ssh-keygen -t ed25519 -C "your_email@example.com" -f "$env:USERPROFILE\.ssh\id_ed25519"
+   ```
+   Press Enter to skip passphrase (or set one if you prefer).
+
+2. **Display your public key** (copy this entire line):
+   ```powershell
+   Get-Content "$env:USERPROFILE\.ssh\id_ed25519.pub"
+   ```
+
+3. **Add key in Google Cloud Console**:
+   - Go to [Compute Engine → Metadata → SSH keys](https://console.cloud.google.com/compute/metadata/sshKeys)
+   - Click **Add SSH key**
+   - Paste in format: `williamreel07:ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... your_email@example.com`  
+     (username colon, then your full public key line — no space between username and colon)
+
+4. **Verify** (from PowerShell):
+   ```powershell
+   ssh -i "$env:USERPROFILE\.ssh\id_ed25519" williamreel07@35.246.236.160 "echo OK"
+   ```
+
+5. **Deploy** (use `-IdentityFile` if your key isn't the default `id_rsa`/`id_ed25519`):
+   ```powershell
+   cd c:\polymarket\deploy
+   .\deploy.ps1 -RepoUrl "https://github.com/YOUR_USERNAME/YOUR_REPO.git" -IdentityFile "$env:USERPROFILE\.ssh\id_ed25519"
+   ```
 
 ## Quick Deploy
 

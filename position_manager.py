@@ -129,6 +129,7 @@ class PositionManager:
             if current_price is None:
                 return
 
+            pos.current_price = current_price  # For dashboard display
             secs_left = pos.seconds_remaining
 
             # ── Exit 1: Time stop ─────────────────────────────────────────

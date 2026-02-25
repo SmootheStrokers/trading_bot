@@ -69,6 +69,15 @@ class PolymarketBot:
 
         self.running = True
         self.start_time = datetime.now(timezone.utc)
+        # Persist session start for dashboard (starting bankroll)
+        _session_start_path = Path("session_start.json")
+        try:
+            _session_start_path.write_text(json.dumps({
+                "starting_bankroll": self.config.BANKROLL,
+                "started_at": self.start_time.isoformat(),
+            }, indent=2))
+        except Exception:
+            pass
         await self.clob.start()
         await self.binance_feed.start()
 
