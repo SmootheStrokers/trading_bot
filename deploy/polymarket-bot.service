@@ -1,0 +1,19 @@
+[Unit]
+Description=PolyMarket 15-Min Up/Down Trading Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/polymarket
+EnvironmentFile=/home/%i/polymarket/.env
+ExecStart=/usr/bin/python3 -u main.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=polymarket-bot
+
+[Install]
+WantedBy=multi-user.target

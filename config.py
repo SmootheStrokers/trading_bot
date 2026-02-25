@@ -1,0 +1,131 @@
+"""
+config.py — All tunable parameters in one place.
+Edit this file to control the bot's behavior.
+"""
+
+import os
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+from dataclasses import dataclass, field
+from typing import Optional
+
+
+@dataclass
+class BotConfig:
+    # ── Polymarket CLOB API ──────────────────────────────────────────────────
+    CLOB_API_URL: str = os.getenv("CLOB_API_URL", "https://clob.polymarket.com")
+    PRIVATE_KEY: str = os.getenv("POLY_PRIVATE_KEY", "")          # Wallet private key
+    PROXY_WALLET: Optional[str] = os.getenv("PROXY_WALLET")       # For positions lookup (Data API)
+    API_KEY: str = os.getenv("POLY_API_KEY", "")                   # CLOB API key
+    API_SECRET: str = os.getenv("POLY_API_SECRET", "")
+    API_PASSPHRASE: str = os.getenv("POLY_API_PASSPHRASE", "")
+    CHAIN_ID: int = int(os.getenv("CHAIN_ID", "137"))              # 137 = Polygon mainnet
+
+    # ── Paper vs Live Trading ──────────────────────────────────────────────────
+    PAPER_TRADING: bool = os.getenv("PAPER_TRADING", "true").lower() in ("true", "1", "yes")
+    # When True: no real orders placed; simulates with paper balance. Use for testing.
+    # Set PAPER_TRADING=false to enable real money trading.
+
+    # ── Capital Management ───────────────────────────────────────────────────
+    BANKROLL: float = float(os.getenv("BANKROLL", "1000.0"))       # Total capital in USDC
+    MAX_KELLY_FRACTION: float = 0.25   # Cap Kelly bet at 25% of full Kelly (safety)
+    MIN_BET_SIZE: float = 5.0          # Minimum order in USDC
+    MAX_BET_SIZE: float = 100.0        # Hard cap per trade in USDC
+    MAX_POSITIONS: int = 5             # Max simultaneous open positions
+    MAX_PORTFOLIO_RISK: float = 0.30   # Never risk more than 30% of bankroll at once
+
+    # ── Edge Filter (core profit gate) ──────────────────────────────────────
+    MIN_EDGE_SIGNALS: int = 3          # Require 3 of 4 signals to fire before trading
+                                       # Signals: OB imbalance, momentum, volume, Kelly
+    MIN_KELLY_EDGE: float = 0.05       # Minimum 5% Kelly edge required (p > implied prob + 0.05)
+    MIN_LIQUIDITY_USDC: float = 500.0  # Market must have at least $500 in order book
+    BASE_KELLY_BOOST: float = 0.08     # Default edge boost (calibrate via backtest); overridden per strategy
+    MAX_SPREAD_CENTS: float = 0.08     # Max bid-ask spread (8¢) to avoid illiquid markets
+
+    # ── Order Book Imbalance ─────────────────────────────────────────────────
+    OB_IMBALANCE_THRESHOLD: float = 0.60   # 60% of depth on one side = signal
+    OB_DEPTH_LEVELS: int = 5               # How many price levels to analyze
+
+    # ── Momentum / Price Velocity ─────────────────────────────────────────────
+    MOMENTUM_WINDOW: int = 10          # Last N price ticks to measure momentum
+    MOMENTUM_MIN_MOVE: float = 0.04    # Price must have moved ≥4% in window
+    MOMENTUM_DIRECTION_CONSISTENCY: float = 0.70  # 70% of ticks must be in same direction
+
+    # ── Volume Spike Detection ───────────────────────────────────────────────
+    VOLUME_SPIKE_MULTIPLIER: float = 2.5   # Current volume must be 2.5x the rolling avg
+    VOLUME_ROLLING_WINDOW: int = 20        # N ticks for baseline volume average
+
+    # ── Execution ────────────────────────────────────────────────────────────
+    ORDER_TYPE: str = "GTC"            # GTC = Good Till Cancelled, FOK = Fill Or Kill
+    SLIPPAGE_TOLERANCE: float = 0.02   # Max 2% slippage from mid price
+    RETRY_ATTEMPTS: int = 3
+    RETRY_DELAY_SECONDS: float = 1.0
+    RETRY_429_DELAY_SECONDS: float = 5.0   # Longer backoff for rate limit (429)
+    CLOB_PAGINATION_DELAY_SECONDS: float = 0.5   # Min delay between paginated requests
+    CLOB_REQUEST_DELAY: float = float(os.getenv("CLOB_REQUEST_DELAY", "0.5"))  # 500ms between all CLOB requests
+
+    # ── Position Management ───────────────────────────────────────────────────
+    TAKE_PROFIT_MULTIPLIER: float = 1.8    # Exit when price hits 1.8x entry (80% profit)
+    STOP_LOSS_THRESHOLD: float = 0.35      # Exit if price drops to 0.35 (entered at ~0.5+)
+    TIME_STOP_BUFFER_SECONDS: int = 90     # Force-exit 90s before market resolves
+    POLL_POSITIONS_INTERVAL: int = 15      # Check open positions every 15 seconds
+
+    # ── Orphan / Maker reconciliation ────────────────────────────────────────
+    ORPHAN_RECONCILE_INTERVAL_SECONDS: int = 120  # Reconcile CLOB positions every 2 min
+
+    # ── Scanner ───────────────────────────────────────────────────────────────
+    SCAN_INTERVAL_SECONDS: int = 30        # Re-scan for new opportunities every 30s
+    MARKET_MIN_TIME_REMAINING: int = 60     # Only enter if ≥1 minute left
+    MARKET_MAX_TIME_REMAINING: int = 900    # 15 min max for slug discovery; tag fallback uses 90 days
+
+    # ── Logging ───────────────────────────────────────────────────────────────
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+    LOG_FILE: Optional[str] = os.getenv("LOG_FILE", "bot.log")
+    TRADE_LOG_FILE: str = "trades.csv"
+
+    # ── Dry Run (testing) ─────────────────────────────────────────────────────
+    DRY_RUN: bool = os.getenv("DRY_RUN", "true").lower() in ("true", "1", "yes")
+
+    # ── Price Feed (Binance geo-restricted in some regions; use CoinGecko fallback) ─
+    PRICE_FEED_SOURCE: str = os.getenv("PRICE_FEED_SOURCE", "binance")  # "binance" | "coingecko"
+
+    # ── Strategy 1: BTC Momentum Carry ───────────────────────────────────────────
+    BTC_MOMENTUM_THRESHOLD: float = 0.003      # 0.3% move required
+    BTC_MOMENTUM_MAX_ENTRY: float = 0.015      # Kill switch: don't enter if move > 1.5% already
+    BTC_MOMENTUM_WINDOW_MINUTES: int = 5       # Window open price lookback
+    ACTIVE_HOURS_START: int = 9                # 9 AM ET
+    ACTIVE_HOURS_END: int = 16                 # 4 PM ET
+    ACTIVE_HOURS_ENABLED: bool = True         # Enforce US/EU hours gate
+
+    # ── Strategy 2: ETH Lag Trade ─────────────────────────────────────────────────
+    ETH_LAG_EXPIRY_SECONDS: int = 90          # How long BTC signal stays valid for ETH entry
+    ETH_LAG_MAX_REPRICING: float = 0.08       # ETH odds must be within 8c of 0.50 in BTC direction
+    ETH_LAG_MIN_BTC_MOVE: float = 0.004       # BTC must have moved 0.4% to trigger ETH lag
+    ETH_LAG_SIGNAL_BOOST: float = 0.12        # Stronger Kelly edge boost for confirmed lag trades
+
+    # ── Strategy 3: SOL Short-Squeeze ────────────────────────────────────────────
+    SOL_FUNDING_RATE_THRESHOLD: float = -0.001   # Funding must be this negative or more
+    SOL_RSI_OVERSOLD_THRESHOLD: float = 38.0     # RSI must be below this
+    SOL_SQUEEZE_SIGNAL_BOOST: float = 0.15       # Extra Kelly edge boost for squeeze setups
+    SOL_MIN_EDGE_SIGNALS: int = 2                # SOL only needs 2 of 4 base signals (lower bar)
+    SOL_SQUEEZE_MAX_ENTRY_MINUTES: float = 3.0   # Only enter squeeze trades in first 3 min of window
+
+    # ── Strategy 4: Maker Market Making ──────────────────────────────────────────
+    MAKER_MODE_ENABLED: bool = True
+    MAKER_SPREAD_TARGET: float = 0.04           # Place orders 4c apart (bid at 48c, ask at 52c)
+    MAKER_MODE_HOURS_START: int = 23            # Best hours: 11 PM ET
+    MAKER_MODE_HOURS_END: int = 5               # Until 5 AM ET
+    MAKER_MAX_POSITION_SIZE: float = 50.0       # Per-side position in USDC
+    MAKER_VOLATILITY_KILL: float = 0.008        # Cancel maker orders if price moves 0.8% suddenly
+
+    # ── Strategy 5: XRP Catalyst ──────────────────────────────────────────────────
+    XRP_CATALYST_ACTIVE: bool = False
+    XRP_CATALYST_DIRECTION: str = "UP"          # "UP" or "DOWN"
+    XRP_CATALYST_EXPIRY_MINUTES: int = 60       # Auto-expire catalyst flag after 60 minutes
+    XRP_CATALYST_SET_TIME: Optional[str] = None # ISO timestamp when flag was set
+    XRP_CATALYST_SIGNAL_BOOST: float = 0.18     # Maximum Kelly boost for catalyst trades
+    XRP_NO_CATALYST_MIN_SIGNALS: int = 4        # Require ALL 4 signals if no catalyst
