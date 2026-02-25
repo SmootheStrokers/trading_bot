@@ -28,12 +28,14 @@ class PositionManager:
         client: ClobClient,
         executor: OrderExecutor,
         stop_predicate: Optional[Callable[[], bool]] = None,
+        on_trade_close: Optional[Callable[[float], None]] = None,
     ):
         self.config = config
         self.positions: Dict[str, Position] = {}  # condition_id → Position
         self.client = client
         self.executor = executor
         self._stop_predicate = stop_predicate  # callable returning True while running
+        self._on_trade_close = on_trade_close  # callback(pnl) when position closes
         self._init_trade_log()
 
     # ── Public Interface ──────────────────────────────────────────────────────
@@ -195,6 +197,11 @@ class PositionManager:
             f"{pos.question[:50]}"
         )
         self._log_trade_close(pos, reason)
+        if self._on_trade_close and pos.pnl is not None:
+            try:
+                self._on_trade_close(pos.pnl)
+            except Exception as e:
+                logger.warning(f"on_trade_close callback error: {e}")
 
     async def _get_current_price(self, token_id: str) -> Optional[float]:
         try:

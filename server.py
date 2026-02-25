@@ -2,18 +2,21 @@
 server.py — FastAPI backend for the Polymarket Bot Dashboard.
 Reads trades.csv, bot.log, and bot_state.json; exposes REST + WebSocket endpoints.
 Fetches live USDC balance from CLOB API when credentials available.
+All metrics computed from trades.csv and bot_state.json — no placeholder data.
 """
 
 import asyncio
 import csv
 import json
-import os
+import math
 import time
-from datetime import datetime
+from collections import defaultdict
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
 
 import aiofiles
+import aiohttp
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -21,8 +24,19 @@ from fastapi.responses import FileResponse
 # Paths relative to project root (server.py lives at project root)
 BASE_DIR = Path(__file__).parent
 TRADES_CSV = BASE_DIR / "trades.csv"
-BOT_LOG = BASE_DIR / "bot.log"
 STATE_FILE = BASE_DIR / "bot_state.json"
+UPDATE_INTERVAL_SEC = 8  # Dashboard refresh interval (balance, status)
+
+
+def _get_log_path() -> Path:
+    """Use same LOG_FILE as bot (from config/env) so dashboard matches terminal output."""
+    try:
+        from config import BotConfig
+        log_file = BotConfig().LOG_FILE or "bot.log"
+        p = Path(log_file)
+        return p if p.is_absolute() else BASE_DIR / log_file
+    except Exception:
+        return BASE_DIR / "bot.log"
 
 app = FastAPI(title="Polymarket Bot Dashboard")
 
@@ -116,11 +130,99 @@ def read_trades() -> List[dict]:
     return trades
 
 
+def compute_trade_stats(trades: List[dict], today: str) -> dict:
+    """Compute comprehensive trade performance stats from trades.csv."""
+    closed = [t for t in trades if t.get("pnl_usdc") and str(t.get("pnl_usdc", "")).strip()]
+    wins = [t for t in closed if float(t.get("pnl_usdc", 0) or 0) > 0]
+    losses = [t for t in closed if float(t.get("pnl_usdc", 0) or 0) <= 0]
+    today_trades = [t for t in closed if (t.get("exit_time") or "").startswith(today)]
+
+    total_pnl = sum(float(t.get("pnl_usdc", 0) or 0) for t in closed)
+    today_pnl = sum(float(t.get("pnl_usdc", 0) or 0) for t in today_trades)
+    total_wins = sum(float(t.get("pnl_usdc", 0)) for t in wins)
+    total_losses = abs(sum(float(t.get("pnl_usdc", 0)) for t in losses))
+
+    avg_win = total_wins / len(wins) if wins else 0
+    avg_loss = total_losses / len(losses) if losses else 0
+    profit_factor = total_wins / total_losses if total_losses > 0 else (float("inf") if total_wins > 0 else 0)
+    largest_win = max((float(t.get("pnl_usdc", 0)) for t in wins), default=0)
+    largest_loss = min((float(t.get("pnl_usdc", 0)) for t in losses), default=0)
+
+    # Win/loss streak (from most recent)
+    streak = 0
+    streak_type = None
+    for t in reversed(closed):
+        pnl = float(t.get("pnl_usdc", 0) or 0)
+        if streak == 0:
+            streak_type = "win" if pnl > 0 else "loss"
+            streak = 1
+        elif (pnl > 0 and streak_type == "win") or (pnl <= 0 and streak_type == "loss"):
+            streak += 1
+        else:
+            break
+
+    today_wins = [t for t in today_trades if float(t.get("pnl_usdc", 0) or 0) > 0]
+    win_rate_today = len(today_wins) / len(today_trades) * 100 if today_trades else None
+    win_rate_all = len(wins) / len(closed) * 100 if closed else 0
+
+    # Trades per hour: today's trades / hours elapsed today
+    now = datetime.utcnow()
+    hours_elapsed = now.hour + now.minute / 60 + now.second / 3600
+    trades_per_hour = len(today_trades) / hours_elapsed if hours_elapsed > 0 and today_trades else 0
+
+    # Last trade time
+    last_trade_time = None
+    if closed:
+        exits = [(t, t.get("exit_time", "")) for t in closed]
+        exits = [x for x in exits if x[1]]
+        if exits:
+            exits.sort(key=lambda x: x[1], reverse=True)
+            last_trade_time = exits[0][1]
+
+    return {
+        "total_trades": len(closed),
+        "trades_today": len(today_trades),
+        "all_time_pnl": round(total_pnl, 2),
+        "today_pnl": round(today_pnl, 2),
+        "win_rate_all": round(win_rate_all, 1),
+        "win_rate_today": round(win_rate_today, 1) if win_rate_today is not None else None,
+        "avg_win": round(avg_win, 2),
+        "avg_loss": round(avg_loss, 2),
+        "profit_factor": round(profit_factor, 2) if profit_factor != float("inf") else None,
+        "largest_win": round(largest_win, 2),
+        "largest_loss": round(largest_loss, 2),
+        "streak": streak,
+        "streak_type": streak_type,
+        "trades_per_hour": round(trades_per_hour, 1),
+        "last_trade_time": last_trade_time,
+        "wins": len(wins),
+        "losses": len(losses),
+    }
+
+
+def get_config_values() -> dict:
+    """Read key config values for dashboard (min edge, loss limit, etc.)."""
+    try:
+        from config import BotConfig
+        c = BotConfig()
+        return {
+            "min_edge_pct": round(c.MIN_EDGE_PCT * 100, 1),
+            "daily_loss_limit_pct": round(c.DAILY_LOSS_LIMIT_PCT * 100, 0),
+            "daily_goal_usd": c.DAILY_PROFIT_GOAL_USD,
+            "max_positions": c.MAX_POSITIONS,
+            "max_bet_size": c.MAX_BET_SIZE,
+            "min_edge_signals": c.MIN_EDGE_SIGNALS,
+        }
+    except Exception:
+        return {}
+
+
 async def tail_log(n: int = 100) -> List[str]:
-    if not BOT_LOG.exists():
+    log_path = _get_log_path()
+    if not log_path.exists():
         return ["[No log file found — bot not yet started]"]
     try:
-        async with aiofiles.open(BOT_LOG, "r") as f:
+        async with aiofiles.open(log_path, "r") as f:
             content = await f.read()
         lines = content.strip().split("\n")
         return lines[-n:]
@@ -145,8 +247,9 @@ def _detect_status(state: dict) -> str:
         return "running"
     # When stopped, check if last log lines indicate an error
     try:
-        if BOT_LOG.exists():
-            with open(BOT_LOG) as f:
+        log_path = _get_log_path()
+        if log_path.exists():
+            with open(log_path) as f:
                 lines = f.readlines()
             for line in lines[-20:]:  # Last 20 lines
                 if "| ERROR" in line or "Traceback" in line:
@@ -160,42 +263,58 @@ def _detect_status(state: dict) -> str:
 async def get_status():
     state = read_state()
     trades = read_trades()
-
-    # Compute session stats from trades
-    closed = [t for t in trades if t.get("pnl_usdc") and str(t.get("pnl_usdc", "")).strip()]
-    session_pnl = sum(
-        float(t["pnl_usdc"]) for t in closed
-        if t.get("pnl_usdc") and str(t["pnl_usdc"]).strip()
-    )
-    wins = [t for t in closed if float(t.get("pnl_usdc", 0) or 0) > 0]
-    win_rate = len(wins) / len(closed) * 100 if closed else 0.0
-
-    # Today's trades
     today = datetime.utcnow().date().isoformat()
-    trades_today = sum(
-        1 for t in closed
-        if t.get("exit_time", "").startswith(today)
-    )
 
-    # Live USDC balance from CLOB API (when live trading + creds); else use state
+    # Full stats
+    stats = compute_trade_stats(trades, today)
+    closed = [t for t in trades if t.get("pnl_usdc") and str(t.get("pnl_usdc", "")).strip()]
+    session_pnl = sum(float(t.get("pnl_usdc", 0) or 0) for t in closed)
+
+    # Live USDC balance from CLOB API
     live_balance = await fetch_live_balance()
-    bankroll = state.get("bankroll", 1000.0)
+    bankroll = float(state.get("bankroll", 1000.0))
     if live_balance is not None:
         bankroll = live_balance
-    starting_bankroll = state.get("starting_bankroll", bankroll)
+    starting_bankroll = float(state.get("starting_bankroll", bankroll))
 
-    status_str = _detect_status(state)
+    # Session P&L %
+    session_pnl_pct = (session_pnl / starting_bankroll * 100) if starting_bankroll else 0
+
+    try:
+        from config import BotConfig
+        goal = BotConfig().DAILY_PROFIT_GOAL_USD
+    except Exception:
+        goal = 1000.0
+
+    risk_state = (state.get("bot_activity") or {}).get("risk_state") or {}
+    daily_loss_limit = bankroll * 0.20  # 20%
+    daily_pnl = stats.get("today_pnl", 0)
+    loss_limit_used_pct = (abs(daily_pnl) / daily_loss_limit * 100) if daily_pnl < 0 and daily_loss_limit > 0 else 0
+
+    goal_tracking = {
+        "daily_pnl": stats.get("today_pnl", 0),
+        "daily_goal_usd": round(goal, 2),
+        "progress_pct": round(min(100, max(0, (daily_pnl / goal) * 100)), 1),
+    }
 
     return {
         **state,
-        "bankroll": round(float(bankroll), 2),
-        "starting_bankroll": round(float(starting_bankroll), 2),
+        "bankroll": round(bankroll, 2),
+        "starting_bankroll": round(starting_bankroll, 2),
         "session_pnl": round(session_pnl, 2),
-        "trades_today": trades_today,
-        "win_rate": round(win_rate, 1),
-        "total_trades": len(closed),
+        "session_pnl_pct": round(session_pnl_pct, 2),
+        "all_time_pnl": stats.get("all_time_pnl", 0),
+        "trades_today": stats.get("trades_today", 0),
+        "win_rate": stats.get("win_rate_all", 0),
+        "win_rate_today": stats.get("win_rate_today"),
+        "total_trades": stats.get("total_trades", 0),
         "balance_source": "live" if live_balance is not None else "state",
-        "status": status_str,
+        "status": _detect_status(state),
+        "goal_tracking": goal_tracking,
+        "trade_stats": stats,
+        "config": get_config_values(),
+        "risk_state": risk_state,
+        "daily_loss_limit_used_pct": round(loss_limit_used_pct, 1),
         "timestamp": datetime.utcnow().isoformat(),
     }
 
@@ -239,6 +358,107 @@ async def get_trades():
 async def get_logs():
     lines = await tail_log(200)
     return {"lines": lines}
+
+
+@app.get("/api/stats")
+async def get_stats():
+    """Full trade performance stats: avg win/loss, profit factor, streak, etc."""
+    trades = read_trades()
+    today = datetime.utcnow().date().isoformat()
+    return compute_trade_stats(trades, today)
+
+
+@app.get("/api/config")
+async def get_config():
+    """Key config values for dashboard (min edge, loss limit, etc.)."""
+    return get_config_values()
+
+
+@app.get("/api/market-prices")
+async def get_market_prices():
+    """BTC/ETH price and funding rates from CoinGecko + Binance. May fail in geo-restricted regions."""
+    result = {"btc_usd": None, "eth_usd": None, "btc_24h_change": None, "eth_24h_change": None, "btc_funding": None, "eth_funding": None}
+    try:
+        async with aiohttp.ClientSession() as session:
+            # CoinGecko for spot (US-accessible)
+            url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true"
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    btc = data.get("bitcoin", {})
+                    eth = data.get("ethereum", {})
+                    result["btc_usd"] = btc.get("usd")
+                    result["eth_usd"] = eth.get("usd")
+                    result["btc_24h_change"] = btc.get("usd_24h_change")
+                    result["eth_24h_change"] = eth.get("usd_24h_change")
+            # Binance funding (may 451 in US)
+            for sym, key in [("BTCUSDT", "btc_funding"), ("ETHUSDT", "eth_funding")]:
+                try:
+                    furl = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={sym}"
+                    async with session.get(furl, timeout=aiohttp.ClientTimeout(total=3)) as fr:
+                        if fr.status == 200:
+                            fd = await fr.json()
+                            rate = float(fd.get("lastFundingRate", 0))
+                            result[key] = round(rate * 100, 4)  # as %
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return result
+
+
+@app.get("/api/goal-tracking")
+async def get_goal_tracking():
+    """$1000/day goal tracker: daily P&L progress, projected total, days to double."""
+    state = read_state()
+    trades = read_trades()
+    today = datetime.utcnow().date().isoformat()
+
+    closed = [t for t in trades if t.get("pnl_usdc") and str(t.get("pnl_usdc", "")).strip()]
+    daily_pnl = sum(
+        float(t["pnl_usdc"]) for t in closed
+        if t.get("exit_time", "").startswith(today)
+    )
+    try:
+        from config import BotConfig
+        goal = BotConfig().DAILY_PROFIT_GOAL_USD
+    except Exception:
+        goal = 1000.0
+
+    bankroll = float(state.get("bankroll", 1000))
+    starting = float(state.get("starting_bankroll", bankroll))
+
+    # Projected daily total: extrapolate from hourly pace if we have trades
+    trades_today = [t for t in closed if t.get("exit_time", "").startswith(today)]
+    hours_elapsed = datetime.utcnow().hour + datetime.utcnow().minute / 60
+    if hours_elapsed > 0 and len(trades_today) > 0:
+        pace = daily_pnl / hours_elapsed
+        projected = pace * 24
+    else:
+        projected = daily_pnl
+
+    # Days to double bankroll at current daily rate
+    if daily_pnl > 0 and bankroll > 0:
+        daily_return_pct = daily_pnl / bankroll
+        if daily_return_pct > 0:
+            import math
+            days_to_double = math.log(2) / math.log(1 + daily_return_pct)
+        else:
+            days_to_double = float("inf")
+    else:
+        days_to_double = None
+
+    risk_state = (state.get("bot_activity") or {}).get("risk_state") or {}
+    return {
+        "daily_pnl": round(daily_pnl, 2),
+        "daily_goal_usd": round(goal, 2),
+        "progress_pct": round(min(100, max(0, (daily_pnl / goal) * 100)), 1),
+        "projected_daily_total": round(projected, 2),
+        "days_to_double": round(days_to_double, 1) if days_to_double and days_to_double != float("inf") else None,
+        "trades_today": len(trades_today),
+        "trading_paused": risk_state.get("trading_paused", False),
+        "pause_reason": risk_state.get("pause_reason", ""),
+    }
 
 
 @app.get("/api/pnl-series")
@@ -285,6 +505,47 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+@app.get("/api/chart-data")
+async def get_chart_data():
+    """Chart data: daily P&L last 7 days, win/loss distribution, trade frequency by hour."""
+    trades = read_trades()
+    closed = [t for t in trades if t.get("pnl_usdc") and t.get("exit_time")]
+    today = datetime.utcnow().date().isoformat()
+
+    # Daily P&L last 7 days
+    daily_pnl = defaultdict(float)
+    for i in range(7):
+        d = (datetime.utcnow() - timedelta(days=i)).date().isoformat()
+        daily_pnl[d] = 0
+    for t in closed:
+        et = (t.get("exit_time") or "")[:10]
+        if et in daily_pnl:
+            daily_pnl[et] += float(t.get("pnl_usdc", 0) or 0)
+    daily_bars = [{"date": d, "pnl": round(daily_pnl[d], 2)} for d in sorted(daily_pnl.keys(), reverse=True)]
+
+    # Win/loss distribution (bin by P&L range)
+    pnls = [float(t.get("pnl_usdc", 0)) for t in closed]
+    win_loss_dist = {"wins": len([p for p in pnls if p > 0]), "losses": len([p for p in pnls if p <= 0])}
+
+    # Trade frequency by hour (UTC) - today only
+    by_hour = defaultdict(int)
+    for t in closed:
+        et = t.get("exit_time", "")
+        if et.startswith(today) and "T" in et:
+            try:
+                h = int(et[11:13])
+                by_hour[h] += 1
+            except (ValueError, IndexError):
+                pass
+    freq_by_hour = [{"hour": h, "count": by_hour.get(h, 0)} for h in range(24)]
+
+    return {
+        "daily_pnl_7d": daily_bars,
+        "win_loss_dist": win_loss_dist,
+        "trades_by_hour": freq_by_hour,
+    }
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
@@ -293,31 +554,46 @@ async def websocket_endpoint(websocket: WebSocket):
             state = read_state()
             trades = read_trades()
             logs = await tail_log(50)
+            today = datetime.utcnow().date().isoformat()
+            stats = compute_trade_stats(trades, today)
 
-            closed = [t for t in trades if t.get("pnl_usdc") and str(t.get("pnl_usdc", "")).strip()]
-            session_pnl = sum(
-                float(t["pnl_usdc"]) for t in closed
-                if t.get("pnl_usdc") and str(t["pnl_usdc"]).strip()
-            )
-            wins = [t for t in closed if float(t.get("pnl_usdc", 0) or 0) > 0]
-            win_rate = len(wins) / len(closed) * 100 if closed else 0.0
-
-            # Live balance (cached 8s)
             live_balance = await fetch_live_balance()
-            bankroll = state.get("bankroll", 1000.0)
+            bankroll = float(state.get("bankroll", 1000.0))
             if live_balance is not None:
                 bankroll = live_balance
+            starting = float(state.get("starting_bankroll", bankroll))
+            session_pnl = stats.get("all_time_pnl", 0)  # All trades in file = session
+            session_pnl_pct = (session_pnl / starting * 100) if starting else 0
 
-            status_str = _detect_status(state)
+            try:
+                from config import BotConfig
+                goal = BotConfig().DAILY_PROFIT_GOAL_USD
+            except Exception:
+                goal = 1000.0
+            daily_pnl = stats.get("today_pnl", 0)
+            risk_state = (state.get("bot_activity") or {}).get("risk_state") or {}
+
             status = {
                 **state,
-                "bankroll": round(float(bankroll), 2),
-                "starting_bankroll": round(float(state.get("starting_bankroll", bankroll)), 2),
+                "bankroll": round(bankroll, 2),
+                "starting_bankroll": round(starting, 2),
                 "session_pnl": round(session_pnl, 2),
-                "win_rate": round(win_rate, 1),
-                "total_trades": len(closed),
+                "session_pnl_pct": round(session_pnl_pct, 2),
+                "all_time_pnl": stats.get("all_time_pnl", 0),
+                "trades_today": stats.get("trades_today", 0),
+                "win_rate": stats.get("win_rate_all", 0),
+                "win_rate_today": stats.get("win_rate_today"),
+                "total_trades": stats.get("total_trades", 0),
                 "balance_source": "live" if live_balance is not None else "state",
-                "status": status_str,
+                "status": _detect_status(state),
+                "goal_tracking": {
+                    "daily_pnl": round(daily_pnl, 2),
+                    "daily_goal_usd": round(goal, 2),
+                    "progress_pct": round(min(100, max(0, (daily_pnl / goal) * 100)), 1),
+                },
+                "trade_stats": stats,
+                "config": get_config_values(),
+                "risk_state": risk_state,
             }
 
             payload = {
@@ -329,7 +605,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "timestamp": datetime.utcnow().isoformat(),
             }
             await websocket.send_json(payload)
-            await asyncio.sleep(2)
+            await asyncio.sleep(UPDATE_INTERVAL_SEC)
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 

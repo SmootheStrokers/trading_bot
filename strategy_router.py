@@ -77,7 +77,7 @@ class StrategyRouter:
         btc_is_neutral_or_up = btc_pct is None or btc_pct >= -0.002
 
         funding_rate = 0.0
-        if asset == "SOL":
+        if asset in ("BTC", "ETH", "SOL"):
             funding_rate = await binance_feed.get_funding_rate(asset)
 
         btc_price_history = None

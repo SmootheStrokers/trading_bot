@@ -74,7 +74,10 @@ def write_state(
     paper_trading: bool = True,
     btc_signal_state: dict = None,
     markets_last_scan: int = 0,
+    markets_with_edge: int = 0,
     maker_active: bool = False,
+    risk_state: dict = None,
+    daily_pnl: float = None,
 ):
     """
     Write current bot state to bot_state.json.
@@ -123,7 +126,13 @@ def write_state(
                     bot_activity["btc_signal_side"], "value", bot_activity["btc_signal_side"]
                 )
         bot_activity["markets_last_scan"] = markets_last_scan
+        bot_activity["markets_with_edge"] = markets_with_edge
         bot_activity["maker_active"] = maker_active
+
+        if risk_state:
+            bot_activity["risk_state"] = risk_state
+        if daily_pnl is not None:
+            bot_activity["daily_pnl"] = round(daily_pnl, 2)
 
         state = {
             "running": running,

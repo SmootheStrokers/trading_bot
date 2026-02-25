@@ -168,6 +168,9 @@ class EdgeFilter:
             kelly_boost = self.config.SOL_SQUEEZE_SIGNAL_BOOST
         elif xrp_catalyst_signal:
             kelly_boost = self.config.XRP_CATALYST_SIGNAL_BOOST
+        # Binance funding alignment: negative funding + YES = shorts paying, potential squeeze
+        elif funding_rate is not None and funding_rate < -0.0005 and consensus_side == Side.YES:
+            kelly_boost = getattr(self.config, "BASE_KELLY_BOOST", 0.08) + 0.02
         est_prob, implied_prob, kelly_edge, kelly_size, kelly_signal = \
             self._check_kelly(mid, consensus_side, edge_boost=kelly_boost)
 
@@ -202,9 +205,13 @@ class EdgeFilter:
             extra_sides=[btc_mom_side, eth_lag_side, sol_squeeze_side, xrp_catalyst_side],
         )
 
+        min_edge = max(
+            self.config.MIN_KELLY_EDGE,
+            getattr(self.config, "MIN_EDGE_PCT", 0.03),
+        )
         has_edge = (
             effective_count >= min_signals
-            and kelly_edge >= self.config.MIN_KELLY_EDGE
+            and kelly_edge >= min_edge
             and directions_agree
             and consensus_side is not None
             and kelly_size >= self.config.MIN_BET_SIZE
@@ -557,9 +564,18 @@ class EdgeFilter:
 
         kelly_edge = estimated_prob - implied_prob
 
-        # Apply fractional Kelly (safer — never full Kelly)
-        fractional_kelly = kelly_fraction * self.config.MAX_KELLY_FRACTION
-        raw_size = fractional_kelly * self.config.BANKROLL
+        # Position sizing: kelly (full), fractional_kelly, or bankroll_pct
+        mode = getattr(self.config, "POSITION_SIZING_MODE", "fractional_kelly")
+        kelly_frac = getattr(self.config, "KELLY_FRACTION", 0.5)
+        if mode == "kelly":
+            frac = kelly_fraction
+        elif mode == "fractional_kelly":
+            frac = kelly_fraction * kelly_frac  # e.g. 0.5 = half-Kelly
+        else:
+            # bankroll_pct: dynamic % based on edge, capped
+            base_pct = min(0.08, max(0.02, kelly_edge + 0.02))
+            frac = base_pct
+        raw_size = frac * self.config.BANKROLL
 
         # Clamp to configured limits
         kelly_size = max(

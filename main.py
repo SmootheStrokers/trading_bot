@@ -20,12 +20,15 @@ from edge_filter import EdgeFilter
 from executor import OrderExecutor
 from position_manager import PositionManager
 from orphan_handler import OrphanHandler
+from risk_manager import RiskManager
 from state_writer import write_state
 from logger import setup_logger
 from binance_feed import BinanceFeed
 from strategy_router import StrategyRouter
 
-logger = setup_logger("main")
+# Configure logging early — use config.LOG_FILE so dashboard reads same file as terminal
+config = BotConfig()
+logger = setup_logger("main", log_file=config.LOG_FILE)
 
 
 class PolymarketBot:
@@ -36,9 +39,11 @@ class PolymarketBot:
         self.edge_filter = EdgeFilter(config)
         self.strategy_router = StrategyRouter(config, self.edge_filter)
         self.executor = OrderExecutor(config, self.clob)
+        self.risk_manager = RiskManager(config)
         self.position_manager = PositionManager(
             config, self.clob, self.executor,
             stop_predicate=lambda: self.running,
+            on_trade_close=lambda pnl: self.risk_manager.record_trade_close(pnl),
         )
         self.orphan_handler = OrphanHandler(config, self.clob, self.position_manager)
         self.binance_feed = BinanceFeed(config)
@@ -187,6 +192,7 @@ class PolymarketBot:
 
                 markets = await self.scanner.fetch_active_15min_markets()
                 num_markets = len(markets)
+                markets_with_edge = 0
                 logger.info(f"Scanned {num_markets} active 15-min markets")
 
                 # Orphan reconciliation (periodic)
@@ -204,6 +210,7 @@ class PolymarketBot:
                 btc_markets = [m for m in markets if self._asset(m.question) == "BTC"]
                 other_markets = [m for m in markets if m not in btc_markets]
                 for market in btc_markets + other_markets:
+                    can_trade = True  # Reset per market; risk checks may set False
                     asset = self._asset(market.question)
                     if self.position_manager.has_position(market.condition_id):
                         continue
@@ -217,6 +224,38 @@ class PolymarketBot:
                         self.btc_signal_state,
                     )
 
+                    # Risk checks (only when edge found): daily loss limit, per-trade limit
+                    can_trade = True
+                    if edge_result.has_edge:
+                        bankroll = self.config.BANKROLL
+                        if self.config.PAPER_TRADING:
+                            try:
+                                from state_writer import _compute_bankroll_from_trades, _read_starting_bankroll
+                                starting = _read_starting_bankroll(self.config.BANKROLL)
+                                bankroll = _compute_bankroll_from_trades(starting)
+                            except Exception:
+                                bankroll = self.config.BANKROLL
+                        self.risk_manager.reset_daily_at_midnight()
+                        capped_size = min(
+                            edge_result.kelly_size,
+                            self.risk_manager.get_max_position_size(bankroll),
+                        )
+                        can_trade, risk_reason = self.risk_manager.can_trade(bankroll, capped_size)
+                        # After loss streak, require higher edge to avoid revenge trading
+                        loss_streak = self.risk_manager.get_consecutive_losses()
+                        min_edge_boost = getattr(self.config, "LOSS_STREAK_REQUIRE_HIGHER_EDGE", 2)
+                        if can_trade and loss_streak >= min_edge_boost:
+                            extra_edge = 0.02
+                            if edge_result.kelly_edge < max(self.config.MIN_KELLY_EDGE, getattr(self.config, "MIN_EDGE_PCT", 0.03)) + extra_edge:
+                                can_trade = False
+                                logger.warning(f"Loss streak {loss_streak} — requiring +{extra_edge:.0%} extra edge, skipping")
+                        if not can_trade and risk_reason:
+                            logger.warning(f"Risk blocked: {risk_reason}")
+                        else:
+                            edge_result.kelly_size = capped_size
+                            if edge_result.kelly_size < self.config.MIN_BET_SIZE:
+                                can_trade = False
+
                     if asset == "BTC" and edge_result.has_edge:
                         pct = self.binance_feed.get_pct_move_from_window_open("BTC")
                         if pct is not None and abs(pct) >= self.config.ETH_LAG_MIN_BTC_MOVE:
@@ -229,7 +268,7 @@ class PolymarketBot:
                             )
 
                     actually_entered = False
-                    if edge_result.has_edge:
+                    if edge_result.has_edge and can_trade:
                         if self.position_manager.would_exceed_portfolio_risk(edge_result.kelly_size):
                             logger.debug(
                                 f"Portfolio risk cap — would exceed {self.config.MAX_PORTFOLIO_RISK:.0%} "
@@ -243,11 +282,14 @@ class PolymarketBot:
                                 f"Kelly size: ${edge_result.kelly_size:.2f}"
                             )
                             order_id = await self.executor.place_order(market, edge_result)
-                            if order_id:
-                                self.position_manager.add_position(market, edge_result)
-                                actually_entered = True
+                                if order_id:
+                                    self.position_manager.add_position(market, edge_result)
+                                    self.risk_manager.record_trade_open()
+                                    actually_entered = True
                             else:
                                 logger.warning("Order failed — position not added")
+                    if edge_result.has_edge:
+                        markets_with_edge += 1
                     self._append_signal_feed(market, edge_result, entered=actually_entered)
                     if not edge_result.has_edge:
                         logger.debug(
@@ -258,16 +300,28 @@ class PolymarketBot:
             except Exception as e:
                 logger.error(f"Scan loop error: {e}", exc_info=True)
 
+            bankroll_for_state = self.config.BANKROLL
+            if self.config.PAPER_TRADING:
+                try:
+                    from state_writer import _compute_bankroll_from_trades, _read_starting_bankroll
+                    starting = _read_starting_bankroll(self.config.BANKROLL)
+                    bankroll_for_state = _compute_bankroll_from_trades(starting)
+                except Exception:
+                    pass
+            risk_state = self.risk_manager.get_state(bankroll_for_state)
             write_state(
                 self.position_manager,
                 self.signal_feed,
-                self.config.BANKROLL,
+                bankroll_for_state,
                 running=self.running,
                 start_time=self.start_time,
                 paper_trading=self.config.PAPER_TRADING,
                 btc_signal_state=self.btc_signal_state,
                 markets_last_scan=num_markets,
                 maker_active=self.config.MAKER_MODE_ENABLED and self._is_maker_hours(),
+                markets_with_edge=markets_with_edge,
+                risk_state=risk_state,
+                daily_pnl=risk_state.get("daily_pnl"),
             )
             await asyncio.sleep(self.config.SCAN_INTERVAL_SECONDS)
 
@@ -322,7 +376,6 @@ class PolymarketBot:
 
 
 if __name__ == "__main__":
-    config = BotConfig()
     bot = PolymarketBot(config)
     try:
         asyncio.run(bot.run())

@@ -38,11 +38,22 @@ class BotConfig:
     MAX_POSITIONS: int = 5             # Max simultaneous open positions
     MAX_PORTFOLIO_RISK: float = 0.30   # Never risk more than 30% of bankroll at once
 
+    # ── $1000/Day Goal & Risk Limits ─────────────────────────────────────────
+    DAILY_PROFIT_GOAL_USD: float = float(os.getenv("DAILY_PROFIT_GOAL_USD", "1000.0"))
+    DAILY_LOSS_LIMIT_PCT: float = 0.20  # Hard stop: pause all trading if daily loss >= 20% bankroll
+    PER_TRADE_MAX_LOSS_PCT: float = 0.10  # Max 10% of bankroll per trade (caps position size)
+    MAX_TRADES_PER_HOUR: int = 20       # Rate limit to avoid overtrading
+    LOSS_STREAK_REQUIRE_HIGHER_EDGE: int = 2   # After N consecutive losses, require +2% edge
+    POSITION_SIZING_MODE: str = os.getenv("POSITION_SIZING_MODE", "fractional_kelly")  # kelly | fractional_kelly | bankroll_pct
+    KELLY_FRACTION: float = float(os.getenv("KELLY_FRACTION", "0.5"))  # 0.5 = half-Kelly (when fractional_kelly)
+
     # ── Edge Filter (core profit gate) ──────────────────────────────────────
     MIN_EDGE_SIGNALS: int = 3          # Require 3 of 4 signals to fire before trading
                                        # Signals: OB imbalance, momentum, volume, Kelly
     MIN_KELLY_EDGE: float = 0.05       # Minimum 5% Kelly edge required (p > implied prob + 0.05)
+    MIN_EDGE_PCT: float = float(os.getenv("MIN_EDGE_PCT", "0.04"))  # Configurable min edge (e.g. 3-5%)
     MIN_LIQUIDITY_USDC: float = 500.0  # Market must have at least $500 in order book
+    MIN_MARKET_VOLUME_USD: float = float(os.getenv("MIN_MARKET_VOLUME_USD", "1000.0"))  # Prefer high-volume markets
     BASE_KELLY_BOOST: float = 0.08     # Default edge boost (calibrate via backtest); overridden per strategy
     MAX_SPREAD_CENTS: float = 0.08     # Max bid-ask spread (8¢) to avoid illiquid markets
 
@@ -78,7 +89,7 @@ class BotConfig:
     ORPHAN_RECONCILE_INTERVAL_SECONDS: int = 120  # Reconcile CLOB positions every 2 min
 
     # ── Scanner ───────────────────────────────────────────────────────────────
-    SCAN_INTERVAL_SECONDS: int = 30        # Re-scan for new opportunities every 30s
+    SCAN_INTERVAL_SECONDS: int = int(os.getenv("SCAN_INTERVAL_SECONDS", "30"))  # Re-scan interval (30s default)
     MARKET_MIN_TIME_REMAINING: int = 60     # Only enter if ≥1 minute left
     MARKET_MAX_TIME_REMAINING: int = 900    # 15 min max for slug discovery; tag fallback uses 90 days
 

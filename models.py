@@ -73,6 +73,21 @@ class Market:
     def seconds_remaining(self) -> float:
         return self.end_timestamp - datetime.now(timezone.utc).timestamp()
 
+    @property
+    def total_depth_usdc(self) -> float:
+        """Total order book depth in USDC (bids + asks)."""
+        if not self.order_book:
+            return 0.0
+        return self.order_book.total_bid_depth + self.order_book.total_ask_depth
+
+    @property
+    def recent_volume_usd(self) -> float:
+        """Sum of (price × volume) over last 20 price ticks. High-volume markets preferred."""
+        if not self.price_history or len(self.price_history) < 2:
+            return 0.0
+        recent = self.price_history[-20:]
+        return sum(t.price * t.volume for t in recent)
+
 
 @dataclass
 class EdgeResult:

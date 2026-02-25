@@ -41,6 +41,17 @@ class MarketScanner:
             elif r is not None:
                 enriched.append(r)
 
+        # Filter very low-volume markets (slippage would eat profits); keep if no volume data
+        min_vol = getattr(self.config, "MIN_MARKET_VOLUME_USD", 500.0)
+        enriched = [
+            m for m in enriched
+            if m.recent_volume_usd == 0 or m.recent_volume_usd >= min_vol
+            or m.total_depth_usdc >= self.config.MIN_LIQUIDITY_USDC * 2
+        ]
+
+        # Prioritize high liquidity + volume (biggest edge potential, least slippage)
+        enriched.sort(key=lambda m: (m.total_depth_usdc, m.recent_volume_usd), reverse=True)
+
         return enriched
 
     async def _discover_15min_markets(self) -> List[Market]:
