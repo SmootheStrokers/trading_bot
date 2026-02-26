@@ -207,6 +207,7 @@ def get_config_values() -> dict:
         c = BotConfig()
         return {
             "min_edge_pct": round(c.MIN_EDGE_PCT * 100, 1),
+            "min_kelly_edge": round(c.MIN_KELLY_EDGE * 100, 1),
             "daily_loss_limit_pct": round(c.DAILY_LOSS_LIMIT_PCT * 100, 0),
             "daily_goal_usd": c.DAILY_PROFIT_GOAL_USD,
             "max_positions": c.MAX_POSITIONS,
@@ -245,18 +246,29 @@ def _detect_status(state: dict) -> str:
     """Determine bot status: running, stopped, or error."""
     if state.get("running"):
         return "running"
-    # When stopped, check if last log lines indicate an error
     try:
         log_path = _get_log_path()
         if log_path.exists():
             with open(log_path) as f:
                 lines = f.readlines()
-            for line in lines[-20:]:  # Last 20 lines
+            for line in lines[-20:]:
                 if "| ERROR" in line or "Traceback" in line:
                     return "error"
     except Exception:
         pass
     return "stopped"
+
+
+def _status_display(state: dict) -> str:
+    """Display status: Scanning, Trading, Stopped, Error."""
+    st = _detect_status(state)
+    if st == "stopped":
+        return "Stopped"
+    if st == "error":
+        return "Error"
+    # Running: Trading if markets with edge > 0, else Scanning
+    markets_with_edge = (state.get("bot_activity") or {}).get("markets_with_edge", 0)
+    return "Trading" if markets_with_edge and markets_with_edge > 0 else "Scanning"
 
 
 @app.get("/api/status")
@@ -268,7 +280,11 @@ async def get_status():
     # Full stats
     stats = compute_trade_stats(trades, today)
     closed = [t for t in trades if t.get("pnl_usdc") and str(t.get("pnl_usdc", "")).strip()]
-    session_pnl = sum(float(t.get("pnl_usdc", 0) or 0) for t in closed)
+    today = datetime.utcnow().date().isoformat()
+    session_pnl = sum(
+        float(t.get("pnl_usdc", 0) or 0) for t in closed
+        if (t.get("exit_time") or "").startswith(today)
+    )
 
     # Live USDC balance from CLOB API
     live_balance = await fetch_live_balance()
@@ -287,7 +303,12 @@ async def get_status():
         goal = 1000.0
 
     risk_state = (state.get("bot_activity") or {}).get("risk_state") or {}
-    daily_loss_limit = bankroll * 0.20  # 20%
+    try:
+        from config import BotConfig
+        loss_limit_pct = BotConfig().DAILY_LOSS_LIMIT_PCT
+    except Exception:
+        loss_limit_pct = 0.20
+    daily_loss_limit = bankroll * loss_limit_pct
     daily_pnl = stats.get("today_pnl", 0)
     loss_limit_used_pct = (abs(daily_pnl) / daily_loss_limit * 100) if daily_pnl < 0 and daily_loss_limit > 0 else 0
 
@@ -305,11 +326,12 @@ async def get_status():
         "session_pnl_pct": round(session_pnl_pct, 2),
         "all_time_pnl": stats.get("all_time_pnl", 0),
         "trades_today": stats.get("trades_today", 0),
-        "win_rate": stats.get("win_rate_all", 0),
+        "win_rate": stats.get("win_rate_today") if stats.get("trades_today") else stats.get("win_rate_all", 0),
         "win_rate_today": stats.get("win_rate_today"),
         "total_trades": stats.get("total_trades", 0),
         "balance_source": "live" if live_balance is not None else "state",
         "status": _detect_status(state),
+        "status_display": _status_display(state),
         "goal_tracking": goal_tracking,
         "trade_stats": stats,
         "config": get_config_values(),
@@ -332,9 +354,12 @@ async def get_balance():
         bankroll = live
     starting = state.get("starting_bankroll", bankroll)
     session_pnl = 0.0
+    today = datetime.utcnow().date().isoformat()
     trades = read_trades()
     closed = [t for t in trades if t.get("pnl_usdc") and str(t.get("pnl_usdc", "")).strip()]
     for t in closed:
+        if not (t.get("exit_time") or "").startswith(today):
+            continue
         try:
             session_pnl += float(t.get("pnl_usdc", 0) or 0)
         except (ValueError, TypeError):
@@ -415,30 +440,52 @@ async def get_pnl_by_crypto():
 
 @app.get("/api/market-prices")
 async def get_market_prices():
-    """BTC/ETH price and funding rates from CoinGecko + Binance. May fail in geo-restricted regions."""
-    result = {"btc_usd": None, "eth_usd": None, "btc_24h_change": None, "eth_24h_change": None, "btc_funding": None, "eth_funding": None}
+    """
+    Live crypto prices from bot's Kraken feed (bot_state.json) when available.
+    Falls back to CoinGecko for BTC/ETH. Funding from Binance (N/A if 451 geo-block).
+    """
+    state = read_state()
+    mp = state.get("market_prices") or {}
+
+    result = {
+        "btc_usd": mp.get("btc_usd"),
+        "eth_usd": mp.get("eth_usd"),
+        "sol_usd": mp.get("sol_usd"),
+        "xrp_usd": mp.get("xrp_usd"),
+        "btc_24h_change": None,
+        "eth_24h_change": None,
+        "btc_funding": None,
+        "eth_funding": None,
+    }
+    # If bot has live prices, use them (no 24h change from Kraken)
+    if any(v for v in [result["btc_usd"], result["eth_usd"], result["sol_usd"], result["xrp_usd"]]):
+        pass  # Use state prices as-is
+    # Fallback: CoinGecko for BTC/ETH (and SOL/XRP if missing)
     try:
         async with aiohttp.ClientSession() as session:
-            # CoinGecko for spot (US-accessible)
-            url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true"
+            url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,ripple&vs_currencies=usd&include_24hr_change=true"
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    btc = data.get("bitcoin", {})
-                    eth = data.get("ethereum", {})
-                    result["btc_usd"] = btc.get("usd")
-                    result["eth_usd"] = eth.get("usd")
-                    result["btc_24h_change"] = btc.get("usd_24h_change")
-                    result["eth_24h_change"] = eth.get("usd_24h_change")
-            # Binance funding (may 451 in US)
+                    if result["btc_usd"] is None:
+                        result["btc_usd"] = data.get("bitcoin", {}).get("usd")
+                        result["btc_24h_change"] = data.get("bitcoin", {}).get("usd_24h_change")
+                    if result["eth_usd"] is None:
+                        result["eth_usd"] = data.get("ethereum", {}).get("usd")
+                        result["eth_24h_change"] = data.get("ethereum", {}).get("usd_24h_change")
+                    if result["sol_usd"] is None:
+                        result["sol_usd"] = data.get("solana", {}).get("usd")
+                    if result["xrp_usd"] is None:
+                        result["xrp_usd"] = data.get("ripple", {}).get("usd")
+            # Binance funding (451 in US = N/A)
             for sym, key in [("BTCUSDT", "btc_funding"), ("ETHUSDT", "eth_funding")]:
                 try:
                     furl = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={sym}"
                     async with session.get(furl, timeout=aiohttp.ClientTimeout(total=3)) as fr:
                         if fr.status == 200:
                             fd = await fr.json()
-                            rate = float(fd.get("lastFundingRate", 0))
-                            result[key] = round(rate * 100, 4)  # as %
+                            result[key] = round(float(fd.get("lastFundingRate", 0)) * 100, 4)
+                        # 451 or other error -> leave None, dashboard shows N/A
                 except Exception:
                     pass
     except Exception:
@@ -728,16 +775,18 @@ async def get_chart_data():
 
 
 async def _fetch_market_prices() -> dict:
-    """Fetch BTC/ETH prices and funding rates for dashboard. Cached briefly."""
+    """Fetch prices + funding. Funding returns None on 451 (dashboard shows N/A)."""
     try:
         async with aiohttp.ClientSession() as session:
-            result = {"btc_usd": None, "eth_usd": None, "btc_funding": None, "eth_funding": None}
-            url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd"
+            result = {"btc_usd": None, "eth_usd": None, "sol_usd": None, "xrp_usd": None, "btc_funding": None, "eth_funding": None}
+            url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,ripple&vs_currencies=usd"
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     result["btc_usd"] = data.get("bitcoin", {}).get("usd")
                     result["eth_usd"] = data.get("ethereum", {}).get("usd")
+                    result["sol_usd"] = data.get("solana", {}).get("usd")
+                    result["xrp_usd"] = data.get("ripple", {}).get("usd")
             for sym, key in [("BTCUSDT", "btc_funding"), ("ETHUSDT", "eth_funding")]:
                 try:
                     furl = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={sym}"
@@ -745,6 +794,7 @@ async def _fetch_market_prices() -> dict:
                         if fr.status == 200:
                             fd = await fr.json()
                             result[key] = round(float(fd.get("lastFundingRate", 0)) * 100, 4)
+                        # 451 geo-block: result[key] stays None -> N/A
                 except Exception:
                     pass
             return result
@@ -762,7 +812,16 @@ async def websocket_endpoint(websocket: WebSocket):
             logs = await tail_log(50)
             today = datetime.utcnow().date().isoformat()
             stats = compute_trade_stats(trades, today)
-            market_prices = await _fetch_market_prices()
+            # Prefer Kraken prices from bot state; fallback to CoinGecko
+            mp_state = state.get("market_prices") or {}
+            if mp_state and any(mp_state.get(k) for k in ("btc_usd", "eth_usd", "sol_usd", "xrp_usd")):
+                market_prices = {k: mp_state.get(k) for k in ("btc_usd", "eth_usd", "sol_usd", "xrp_usd", "btc_funding", "eth_funding")}
+                if market_prices.get("btc_funding") is None and market_prices.get("eth_funding") is None:
+                    fetched = await _fetch_market_prices()
+                    market_prices["btc_funding"] = fetched.get("btc_funding")
+                    market_prices["eth_funding"] = fetched.get("eth_funding")
+            else:
+                market_prices = await _fetch_market_prices()
             pnl_by_crypto = compute_pnl_by_crypto(trades)
 
             live_balance = await fetch_live_balance()
@@ -770,7 +829,7 @@ async def websocket_endpoint(websocket: WebSocket):
             if live_balance is not None:
                 bankroll = live_balance
             starting = float(state.get("starting_bankroll", bankroll))
-            session_pnl = stats.get("all_time_pnl", 0)  # All trades in file = session
+            session_pnl = stats.get("today_pnl", 0)  # Today's P&L = session
             session_pnl_pct = (session_pnl / starting * 100) if starting else 0
 
             try:
@@ -789,11 +848,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 "session_pnl_pct": round(session_pnl_pct, 2),
                 "all_time_pnl": stats.get("all_time_pnl", 0),
                 "trades_today": stats.get("trades_today", 0),
-                "win_rate": stats.get("win_rate_all", 0),
+                "win_rate": stats.get("win_rate_today") if stats.get("trades_today") else stats.get("win_rate_all", 0),
                 "win_rate_today": stats.get("win_rate_today"),
                 "total_trades": stats.get("total_trades", 0),
                 "balance_source": "live" if live_balance is not None else "state",
                 "status": _detect_status(state),
+                "status_display": _status_display(state),
                 "goal_tracking": {
                     "daily_pnl": round(daily_pnl, 2),
                     "daily_goal_usd": round(goal, 2),

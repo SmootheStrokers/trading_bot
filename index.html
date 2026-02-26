@@ -779,6 +779,7 @@
         </div>
         <div class="strategy-cards" id="strategy-cards">
           <div class="strategy-card"><span class="strategy-name">BTC Signal</span><span class="strategy-meta" id="strat-btc">—</span></div>
+          <div class="strategy-card"><span class="strategy-name">ETH Signal</span><span class="strategy-meta" id="strat-eth">—</span></div>
           <div class="strategy-card"><span class="strategy-name">Maker</span><span class="strategy-meta" id="strat-maker">—</span></div>
         </div>
       </div>
@@ -818,6 +819,8 @@
         <div id="market-content">
           <div class="market-row"><span class="market-label">BTC</span><span class="market-val" id="market-btc">—</span></div>
           <div class="market-row"><span class="market-label">ETH</span><span class="market-val" id="market-eth">—</span></div>
+          <div class="market-row"><span class="market-label">SOL</span><span class="market-val" id="market-sol">—</span></div>
+          <div class="market-row"><span class="market-label">XRP</span><span class="market-val" id="market-xrp">—</span></div>
           <div class="market-row"><span class="market-label">BTC Funding</span><span class="market-val" id="market-btc-funding">—</span></div>
           <div class="market-row"><span class="market-label">ETH Funding</span><span class="market-val" id="market-eth-funding">—</span></div>
           <div class="market-row"><span class="market-label">Markets Scanned</span><span class="market-val" id="market-scanned">—</span></div>
@@ -1234,11 +1237,14 @@ function initCharts() {
   }
 }
 
-// ── Update equity chart ─────────────────────────────────────────────────────
+// ── Update equity chart (bankroll over time for today's session) ─────────────
 function updateEquityChart() {
   if (!equityChart) return;
   const startBr = state.starting_bankroll ?? state.bankroll ?? 1000;
-  const closed = (trades || []).filter(t => t.pnl_usdc != null && t.exit_time);
+  const today = new Date().toISOString().slice(0, 10);
+  const closed = (trades || []).filter(t =>
+    t.pnl_usdc != null && t.exit_time && (t.exit_time || '').startsWith(today)
+  );
   closed.sort((a,b) => (a.exit_time||'').localeCompare(b.exit_time||''));
 
   const labels = [];
@@ -1380,13 +1386,14 @@ function renderHeader(s) {
   const tradesEl = document.getElementById('h-trades');
   if (tradesEl) tradesEl.textContent = (s.trades_today ?? s.trade_stats?.trades_today ?? 0);
 
-  // Status pill
+  // Status pill: Scanning, Trading, Stopped, Error
   const pill = document.getElementById('status-pill');
   const txt = document.getElementById('status-text');
   const st = s.status ?? (s.running ? 'running' : 'stopped');
+  const display = s.status_display ?? (st === 'running' ? 'Scanning' : st === 'error' ? 'Error' : 'Stopped');
   if (pill && txt) {
     pill.className = 'status-pill ' + (s.paper_trading ? 'paper' : st);
-    txt.textContent = s.paper_trading ? 'PAPER' : st === 'running' ? 'LIVE' : st === 'error' ? 'ERROR' : 'STOPPED';
+    txt.textContent = s.paper_trading ? 'PAPER' : display.toUpperCase();
   }
 }
 
@@ -1396,6 +1403,12 @@ function renderGoal(s) {
   const dailyPnl = gt.daily_pnl ?? s.session_pnl ?? 0;
   const goal = gt.daily_goal_usd ?? 1000;
   const progressPct = Math.min(100, Math.max(0, goal > 0 ? (dailyPnl / goal) * 100 : 0));
+  const tradesToday = s.trades_today ?? s.trade_stats?.trades_today ?? 0;
+  const tradesPerHr = s.trade_stats?.trades_per_hour ?? 0;
+  const hoursElapsed = new Date().getUTCHours() + new Date().getUTCMinutes() / 60;
+  const projectedTotal = hoursElapsed > 0 && tradesToday > 0
+    ? (dailyPnl / hoursElapsed) * 24
+    : dailyPnl;
 
   const pnlEl = document.getElementById('goal-daily-pnl');
   if (pnlEl) {
@@ -1407,7 +1420,11 @@ function renderGoal(s) {
   if (barFill) barFill.style.width = progressPct + '%';
   if (goalCard) goalCard.setAttribute('data-negative', dailyPnl < 0 ? 'true' : 'false');
   const progEl = document.getElementById('goal-progress-text');
-  if (progEl) progEl.textContent = `$${fmtNum(dailyPnl)} / $${fmtNum(goal)} — ${fmtNum(progressPct, 1)}%`;
+  let progText = `$${fmtNum(dailyPnl)} / $${fmtNum(goal)} — ${fmtNum(progressPct, 1)}%`;
+  if (tradesToday > 0 && projectedTotal !== dailyPnl) {
+    progText += ` · On pace for $${fmtNum(projectedTotal)} today`;
+  }
+  if (progEl) progEl.textContent = progText;
 }
 
 // ── Render Health ───────────────────────────────────────────────────────────
@@ -1422,9 +1439,11 @@ function renderHealth(s) {
   if (pctEl) pctEl.textContent = fmtNum(lossPct, 0) + '%';
 
   const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v != null && v !== '' ? v : '—'; };
-  set('health-status', s.running ? 'Scanning' : 'Stopped');
+  const statusDisp = s.status_display ?? (s.running ? 'Scanning' : 'Stopped');
+  set('health-status', statusDisp);
   set('health-trades-hr', s.trade_stats?.trades_per_hour != null ? fmtNum(s.trade_stats.trades_per_hour, 1) : '—');
-  set('health-min-edge', s.config?.min_edge_pct != null ? s.config.min_edge_pct + '%' : '—');
+  const minEdge = s.config?.min_kelly_edge ?? s.config?.min_edge_pct;
+  set('health-min-edge', minEdge != null ? minEdge + '%' : '—');
 
   const btcEl = document.getElementById('strat-btc');
   if (btcEl) {
@@ -1437,16 +1456,21 @@ function renderHealth(s) {
       btcEl.style.color = 'var(--text-dim)';
     }
   }
+  const ethEl = document.getElementById('strat-eth');
+  if (ethEl) {
+    ethEl.textContent = s.bot_activity?.eth_lag_active ? 'Active' : 'Inactive';
+    ethEl.style.color = s.bot_activity?.eth_lag_active ? 'var(--green)' : 'var(--text-dim)';
+  }
   const makerEl = document.getElementById('strat-maker');
   if (makerEl) {
     makerEl.textContent = s.bot_activity?.maker_active ? 'Active' : 'Off';
     makerEl.style.color = s.bot_activity?.maker_active ? 'var(--green)' : 'var(--text-dim)';
   }
 
-  // Funding rates in health (from marketPrices - passed via renderMarket, we need to get from global)
+  // Funding rates: show N/A when Binance returns 451 (null)
   const setFunding = (id, v) => {
     const e = document.getElementById(id);
-    if (e) e.textContent = v != null && v !== '' ? Number(v).toFixed(4) + '%' : '—';
+    if (e) e.textContent = v != null && v !== '' ? Number(v).toFixed(4) + '%' : 'N/A';
   };
   setFunding('health-btc-funding', marketPrices?.btc_funding);
   setFunding('health-eth-funding', marketPrices?.eth_funding);
@@ -1502,35 +1526,32 @@ function renderMarket(s, prices) {
   set('market-scanned', s.bot_activity?.markets_last_scan);
   set('market-edge', s.bot_activity?.markets_with_edge);
 
+  const priceWithChange = (val, change) => {
+    if (val == null) return '—';
+    let html = '$' + Number(val).toLocaleString(undefined, {maximumFractionDigits: 0});
+    if (change != null) html += ` <span class="${change >= 0 ? 'up' : 'down'}">(${change >= 0 ? '+' : ''}${Number(change).toFixed(2)}%)</span>`;
+    return html;
+  };
+  const frStr = (v) => v != null && v !== '' ? Number(v).toFixed(4) + '%' + (v > 0 ? ' (longs pay)' : v < 0 ? ' (shorts pay)' : '') : 'N/A';
+
   if (prices) {
-    if (prices.btc_usd != null) {
-      const el = document.getElementById('market-btc');
-      if (el) {
-        const change = prices.btc_24h_change;
-        el.innerHTML = '$' + Number(prices.btc_usd).toLocaleString(undefined, {maximumFractionDigits: 0}) +
-          (change != null ? ` <span class="${change >= 0 ? 'up' : 'down'}">(${change >= 0 ? '+' : ''}${Number(change).toFixed(2)}%)</span>` : '');
-      }
-    } else set('market-btc', '—');
-    if (prices.eth_usd != null) {
-      const el = document.getElementById('market-eth');
-      if (el) {
-        const change = prices.eth_24h_change;
-        el.innerHTML = '$' + Number(prices.eth_usd).toLocaleString(undefined, {maximumFractionDigits: 0}) +
-          (change != null ? ` <span class="${change >= 0 ? 'up' : 'down'}">(${change >= 0 ? '+' : ''}${Number(change).toFixed(2)}%)</span>` : '');
-      }
-    } else set('market-eth', '—');
-    const btcFr = prices.btc_funding;
-    const ethFr = prices.eth_funding;
-    const frStr = (v, label) => v != null ? v.toFixed(4) + '% ' + (v > 0 ? '(longs pay)' : v < 0 ? '(shorts pay)' : '') : '—';
+    const btcEl = document.getElementById('market-btc');
+    if (btcEl) btcEl.innerHTML = priceWithChange(prices.btc_usd, prices.btc_24h_change);
+    const ethEl = document.getElementById('market-eth');
+    if (ethEl) ethEl.innerHTML = priceWithChange(prices.eth_usd, prices.eth_24h_change);
+    set('market-sol', prices.sol_usd != null ? '$' + Number(prices.sol_usd).toLocaleString(undefined, {maximumFractionDigits: 2}) : '—');
+    set('market-xrp', prices.xrp_usd != null ? '$' + Number(prices.xrp_usd).toLocaleString(undefined, {maximumFractionDigits: 2}) : '—');
     const btcFrEl = document.getElementById('market-btc-funding');
     const ethFrEl = document.getElementById('market-eth-funding');
-    if (btcFrEl) btcFrEl.textContent = frStr(btcFr, 'BTC');
-    if (ethFrEl) ethFrEl.textContent = frStr(ethFr, 'ETH');
+    if (btcFrEl) btcFrEl.textContent = frStr(prices.btc_funding);
+    if (ethFrEl) ethFrEl.textContent = frStr(prices.eth_funding);
   } else {
     set('market-btc', '—');
     set('market-eth', '—');
-    set('market-btc-funding', '—');
-    set('market-eth-funding', '—');
+    set('market-sol', '—');
+    set('market-xrp', '—');
+    set('market-btc-funding', 'N/A');
+    set('market-eth-funding', 'N/A');
   }
 
   const up = document.getElementById('market-update');
@@ -1590,19 +1611,20 @@ function renderTrades(tradeList) {
   const existing = container.querySelectorAll('.trade-row');
   const frag = document.createDocumentFragment();
 
-  sorted.slice(0, 50).forEach((t, i) => {
+  sorted.slice(0, 100).forEach((t, i) => {
     const pnl = parseFloat(t.pnl_usdc || 0);
     const isWin = pnl > 0;
     const row = document.createElement('div');
     row.className = 'trade-row ' + (isWin ? 'win' : 'loss');
+    const asset = (t.question||'').match(/bitcoin|btc/i) ? 'BTC' : (t.question||'').match(/ethereum|eth/i) ? 'ETH' : (t.question||'').match(/solana|sol/i) ? 'SOL' : (t.question||'').match(/xrp|ripple/i) ? 'XRP' : '—';
     row.innerHTML = `
       <span>${(t.exit_time||'').slice(11, 19)}</span>
-      <span class="pos-market" title="${escHtml(t.question||'')}">${escHtml((t.question||'').slice(0, 25))}</span>
+      <span class="pos-market" title="${escHtml(t.question||'')}">${asset}</span>
       <span class="badge-${(t.side||'').toLowerCase()}">${t.side||'?'}</span>
       <span>$${fmtNum(parseFloat(t.size_usdc||0))}</span>
       <span>${fmtNum(parseFloat(t.entry_price||0), 2)}→${t.exit_price ? fmtNum(parseFloat(t.exit_price), 2) : '—'}</span>
       <span style="color:${isWin ? 'var(--green)' : 'var(--red)'};font-weight:600">${pnl >= 0 ? '+' : ''}$${fmtNum(pnl)}</span>
-      <span>${(t.strategy||'—').replace(/_/g,' ')}</span>
+      <span>${(t.reason||t.strategy||'—').replace(/_/g,' ')}</span>
     `;
     frag.appendChild(row);
   });

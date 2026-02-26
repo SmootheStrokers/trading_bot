@@ -31,6 +31,9 @@ from models import EdgeResult, Side
 # Configure logging early — use config.LOG_FILE so dashboard reads same file as terminal
 config = BotConfig()
 logger = setup_logger("main", log_file=config.LOG_FILE)
+# Suppress websocket heartbeat spam in bot.log
+logging.getLogger("websockets").setLevel(logging.WARNING)
+logging.getLogger("websockets.client").setLevel(logging.WARNING)
 
 
 class PolymarketBot:
@@ -203,6 +206,7 @@ class PolymarketBot:
                     markets_with_edge=self._last_markets_with_edge,
                     risk_state=risk_state,
                     daily_pnl=risk_state.get("daily_pnl"),
+                    market_prices=getattr(self.binance_feed, "latest_prices", None) or {},
                 )
             except asyncio.CancelledError:
                 break
@@ -404,6 +408,7 @@ class PolymarketBot:
                 markets_with_edge=markets_with_edge,
                 risk_state=risk_state,
                 daily_pnl=risk_state.get("daily_pnl"),
+                market_prices=getattr(self.binance_feed, "latest_prices", None) or {},
             )
             await asyncio.sleep(self.config.SCAN_INTERVAL_SECONDS)
 

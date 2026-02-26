@@ -81,6 +81,7 @@ def write_state(
     maker_active: bool = False,
     risk_state: dict = None,
     daily_pnl: float = None,
+    market_prices: dict = None,
 ):
     """
     Write current bot state to bot_state.json.
@@ -131,6 +132,11 @@ def write_state(
         bot_activity["markets_last_scan"] = markets_last_scan
         bot_activity["markets_with_edge"] = markets_with_edge
         bot_activity["maker_active"] = maker_active
+        recent_signals = signal_feed[-10:] if signal_feed else []
+        bot_activity["eth_lag_active"] = any(
+            (s.get("eth_lag_signal") if isinstance(s, dict) else getattr(s, "eth_lag_signal", False))
+            for s in recent_signals
+        )
 
         if risk_state:
             bot_activity["risk_state"] = risk_state
@@ -144,8 +150,14 @@ def write_state(
             "bankroll": round(bankroll, 2),
             "starting_bankroll": round(starting_bankroll, 2),
             "uptime_seconds": uptime,
-            "signal_feed": signal_feed[-50:],  # Keep last 50 evaluations (incl. strategy_name)
+            "signal_feed": signal_feed[-50:],
             "bot_activity": bot_activity,
+            "market_prices": {
+                "btc_usd": round(market_prices.get("BTC", 0), 2) if market_prices and market_prices.get("BTC") else None,
+                "eth_usd": round(market_prices.get("ETH", 0), 2) if market_prices and market_prices.get("ETH") else None,
+                "sol_usd": round(market_prices.get("SOL", 0), 2) if market_prices and market_prices.get("SOL") else None,
+                "xrp_usd": round(market_prices.get("XRP", 0), 2) if market_prices and market_prices.get("XRP") else None,
+            } if market_prices else {},
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }
 
