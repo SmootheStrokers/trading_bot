@@ -115,8 +115,11 @@ class PolymarketBot:
             await self._cleanup()
 
     async def _cleanup(self):
-        """Close all positions, then network sessions."""
-        await self.position_manager.close_all_async()
+        """Close positions on restart only if CLOSE_ON_RESTART=true; otherwise leave open for resume."""
+        if self.config.CLOSE_ON_RESTART:
+            await self.position_manager.close_all_async()
+        else:
+            logger.info("CLOSE_ON_RESTART=false — leaving positions open for resume")
         await self.binance_feed.stop()
         await self.clob.close()
 
