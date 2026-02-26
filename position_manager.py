@@ -165,8 +165,10 @@ class PositionManager:
                 await self._exit_position(pos, current_price, reason="TAKE_PROFIT")
                 return
 
-            # ── Exit 3: Stop loss (after min hold) ─────────────────────────
+            # ── Exit 3: Stop loss ─────────────────────────────────────────
+            pnl_pct = (current_price - pos.entry_price) / pos.entry_price if pos.entry_price else 0
             stop_loss_threshold = pos.entry_price * (1.0 - self.config.STOP_LOSS_PCT)
+            emergency_threshold = pos.entry_price * (1.0 - self.config.EMERGENCY_STOP_PCT)
             now_utc = datetime.now(timezone.utc)
             entry_dt = pos.entry_time.replace(tzinfo=timezone.utc) if pos.entry_time.tzinfo is None else pos.entry_time
             seconds_held = (now_utc - entry_dt).total_seconds()
@@ -174,13 +176,23 @@ class PositionManager:
             q = (pos.question or "").lower()
             asset = "BTC" if "bitcoin" in q or "btc" in q else "ETH" if "ethereum" in q or "eth" in q else "SOL" if "solana" in q or "sol" in q else "XRP" if "xrp" in q else "??"
 
+            # Emergency stop: loss >= 40% → close immediately (ignore min hold)
+            if current_price <= emergency_threshold:
+                logger.warning(
+                    f"EMERGENCY STOP {pnl_pct:.1%} | "
+                    f"entry={pos.entry_price:.3f} now={current_price:.3f} | "
+                    f"{pos.question[:50]}"
+                )
+                await self._exit_position(pos, current_price, reason="EMERGENCY_STOP")
+                return
+
+            # Normal stop loss: loss > 15% AND hold > 30s
             if current_price <= stop_loss_threshold:
                 if seconds_held < min_hold:
                     logger.info(
                         f"[{asset}] Stop loss suppressed — min hold {min_hold}s not reached ({seconds_held:.0f}s)"
                     )
                 else:
-                    pnl_pct = (current_price - pos.entry_price) / pos.entry_price if pos.entry_price else 0
                     logger.warning(
                         f"STOP LOSS {pnl_pct:.1%} | "
                         f"entry={pos.entry_price:.3f} now={current_price:.3f} thresh={stop_loss_threshold:.3f} | "

@@ -84,6 +84,7 @@ class BotConfig:
     TAKE_PROFIT_MULTIPLIER: float = 1.8    # Exit when price hits 1.8x entry (80% profit)
     STOP_LOSS_THRESHOLD: float = 0.35      # Legacy: fixed price (ignored if STOP_LOSS_PCT set)
     STOP_LOSS_PCT: float = float(os.getenv("STOP_LOSS_PCT", "0.15"))  # 15% drop from entry (e.g. 0.40->0.34)
+    EMERGENCY_STOP_PCT: float = float(os.getenv("EMERGENCY_STOP_PCT", "0.40"))  # -40% hard stop, ignores min hold
     MIN_HOLD_SECONDS: int = int(os.getenv("MIN_HOLD_SECONDS", "30"))  # Ignore stop loss for first 30s
     CLOSE_ON_RESTART: bool = os.getenv("CLOSE_ON_RESTART", "false").lower() in ("true", "1", "yes")
     TIME_STOP_BUFFER_SECONDS: int = 90     # Force-exit 90s before market resolves
