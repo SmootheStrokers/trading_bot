@@ -61,6 +61,7 @@ class StrategyRouter:
         market: Market,
         binance_feed: BinanceFeedInterface,
         btc_signal_state: Dict[str, Any],
+        bankroll: Optional[float] = None,
     ) -> EdgeResult:
         """
         Route a market to the correct strategy evaluation.
@@ -102,6 +103,7 @@ class StrategyRouter:
             funding_rate=funding_rate if asset == "SOL" else None,
             btc_is_neutral_or_up=btc_is_neutral_or_up,
             btc_price_history=btc_price_history,
+            bankroll=bankroll,
         )
         result.asset = asset
         return result

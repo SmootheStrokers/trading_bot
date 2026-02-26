@@ -6,6 +6,8 @@ Core philosophy: profit edge or no trade.
 import asyncio
 import json
 import logging
+
+import aiohttp
 import os
 import signal
 import sys
@@ -31,6 +33,43 @@ from models import EdgeResult, Side
 # Configure logging early — use config.LOG_FILE so dashboard reads same file as terminal
 config = BotConfig()
 logger = setup_logger("main", log_file=config.LOG_FILE)
+
+
+async def _check_geoblock() -> None:
+    """Check if current IP is geoblocked by Polymarket. Exit with clear message if blocked."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get("https://polymarket.com/api/geoblock", timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return
+                data = await resp.json()
+                if data.get("blocked"):
+                    country = data.get("country", "your region")
+                    logger.error(
+                        f"Polymarket blocks trading from {country}. "
+                        "See https://docs.polymarket.com/developers/CLOB/geoblock"
+                    )
+                    sys.exit(1)
+    except Exception as e:
+        logger.warning(f"Could not check geoblock status: {e}")
+
+
+def _validate_private_key(cfg: BotConfig) -> None:
+    """Validate POLY_PRIVATE_KEY before live trading. Exit with clear message if invalid."""
+    key = (cfg.PRIVATE_KEY or "").strip()
+    if not key:
+        logger.error("POLY_PRIVATE_KEY is empty. Live trading requires your wallet's private key.")
+        sys.exit(1)
+    hex_part = key[2:] if key.lower().startswith("0x") else key
+    if len(hex_part) != 64:
+        hint = (
+            "You may have entered your wallet ADDRESS (40 hex chars) instead of the private key. "
+            "Export from MetaMask: Account details -> Export Private Key."
+        ) if len(hex_part) == 40 else ""
+        logger.error(
+            f"POLY_PRIVATE_KEY must be 64 hex characters (32 bytes). Got {len(hex_part)}. {hint}"
+        )
+        sys.exit(1)
 # Suppress websocket heartbeat spam in bot.log
 logging.getLogger("websockets").setLevel(logging.WARNING)
 logging.getLogger("websockets.client").setLevel(logging.WARNING)
@@ -66,43 +105,98 @@ class PolymarketBot:
         self.maker_positions: dict = {}  # condition_id -> {"yes_id", "no_id", "placed_at"}
         self._last_num_markets = 0
         self._last_markets_with_edge = 0
+        self._live_bankroll: Optional[float] = None
+        self._starting_bankroll: Optional[float] = None
+
+    async def _fetch_live_balance(self) -> Optional[float]:
+        """Fetch USDC balance from Polymarket CLOB. Returns None on failure."""
+        try:
+            resp = await self.clob.get_balance()
+            val = None
+            if isinstance(resp, (int, float)):
+                val = float(resp)
+            elif isinstance(resp, dict):
+                val = resp.get("balance") or resp.get("usdc") or resp.get("available")
+                if val is None and "balances" in resp:
+                    bals = resp["balances"]
+                    if isinstance(bals, list) and bals:
+                        b = bals[0]
+                        val = b.get("currentBalance") or b.get("buyingPower") or b.get("assetAvailable")
+                if val is not None:
+                    val = float(val)
+            return round(val, 2) if val is not None else None
+        except Exception as e:
+            logger.warning(f"Could not fetch live balance: {e}")
+            return None
+
+    def get_effective_bankroll(self) -> float:
+        """Bankroll to use for sizing/risk. Live mode: Polymarket balance. Paper: from trades or config."""
+        if not self.config.PAPER_TRADING and not getattr(self.config, "DRY_RUN", False):
+            if self._live_bankroll is not None:
+                return self._live_bankroll
+            return self.config.BANKROLL
+        try:
+            from state_writer import _compute_bankroll_from_trades, _read_starting_bankroll
+            starting = _read_starting_bankroll(self.config.BANKROLL)
+            return _compute_bankroll_from_trades(starting)
+        except Exception:
+            return self.config.BANKROLL
 
     async def run(self):
         logger.info("=" * 60)
         logger.info("  Polymarket 15-Min Up/Down Bot — STARTING")
         if self.config.PAPER_TRADING:
             logger.info("  *** PAPER TRADING MODE — No real orders will be placed ***")
-        if getattr(self.config, "DRY_RUN", False):
+        elif getattr(self.config, "DRY_RUN", False):
             logger.info("  *** DRY RUN — No real orders will be placed ***")
+        else:
+            logger.info("  *** LIVE TRADING — Real money orders will be placed ***")
         logger.info(f"  Min edge signals required: {self.config.MIN_EDGE_SIGNALS}")
         logger.info(f"  Max concurrent positions:  {self.config.MAX_POSITIONS}")
-        logger.info(f"  Bankroll:                  ${self.config.BANKROLL:.2f}")
+        logger.info(f"  Bankroll (config):          ${self.config.BANKROLL:.2f}")
         logger.info("=" * 60)
 
         self.running = True
         self.start_time = datetime.now(timezone.utc)
-        # Persist session start for dashboard (starting bankroll)
-        _session_start_path = Path("session_start.json")
         try:
-            _session_start_path.write_text(json.dumps({
-                "starting_bankroll": self.config.BANKROLL,
-                "started_at": self.start_time.isoformat(),
-            }, indent=2))
-        except Exception:
-            pass
-        await self.clob.start()
-        await self.binance_feed.start()
+            await self.clob.start()
+            await self.binance_feed.start()
 
-        # One-time force test trade (FORCE_TEST_TRADE=true) to verify full pipeline
-        if os.getenv("FORCE_TEST_TRADE", "false").lower() in ("true", "1", "yes"):
-            await self._force_test_trade_once()
+            # Live mode: fetch Polymarket balance and use it (ignores BANKROLL from env)
+            if not self.config.PAPER_TRADING and not getattr(self.config, "DRY_RUN", False):
+                bal = await self._fetch_live_balance()
+                if bal is not None:
+                    self._live_bankroll = bal
+                    self._starting_bankroll = bal
+                    logger.info(f"  Live Polymarket balance:    ${bal:.2f} (using for all sizing)")
+                else:
+                    logger.warning("  Could not fetch Polymarket balance — using BANKROLL from config")
 
-        if sys.platform != "win32":
-            loop = asyncio.get_event_loop()
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                loop.add_signal_handler(sig, self.shutdown)
+            # Persist session start for dashboard
+            _session_start_path = Path("session_start.json")
+            try:
+                start_br = self._starting_bankroll or self.config.BANKROLL
+                _session_start_path.write_text(json.dumps({
+                    "starting_bankroll": start_br,
+                    "started_at": self.start_time.isoformat(),
+                }, indent=2))
+            except Exception:
+                pass
 
-        try:
+            # Validate credentials when live trading (fail fast with clear message)
+            if not self.config.PAPER_TRADING and not getattr(self.config, "DRY_RUN", False):
+                _validate_private_key(self.config)
+                await _check_geoblock()
+
+            # One-time force test trade (FORCE_TEST_TRADE=true) to verify full pipeline
+            if os.getenv("FORCE_TEST_TRADE", "false").lower() in ("true", "1", "yes"):
+                await self._force_test_trade_once()
+
+            if sys.platform != "win32":
+                loop = asyncio.get_event_loop()
+                for sig in (signal.SIGINT, signal.SIGTERM):
+                    loop.add_signal_handler(sig, self.shutdown)
+
             await asyncio.gather(
                 self.scan_loop(),
                 self.maker_loop(),
@@ -187,14 +281,7 @@ class PolymarketBot:
                 await asyncio.sleep(8)
                 if not self.running:
                     break
-                bankroll_for_state = self.config.BANKROLL
-                if self.config.PAPER_TRADING:
-                    try:
-                        from state_writer import _compute_bankroll_from_trades, _read_starting_bankroll
-                        starting = _read_starting_bankroll(self.config.BANKROLL)
-                        bankroll_for_state = _compute_bankroll_from_trades(starting)
-                    except Exception:
-                        pass
+                bankroll_for_state = self.get_effective_bankroll()
                 risk_state = self.risk_manager.get_state(bankroll_for_state)
                 write_state(
                     self.position_manager,
@@ -273,6 +360,12 @@ class PolymarketBot:
         num_markets = 0
         while self.running:
             try:
+                # Live mode: refresh Polymarket balance each scan
+                if not self.config.PAPER_TRADING and not getattr(self.config, "DRY_RUN", False):
+                    bal = await self._fetch_live_balance()
+                    if bal is not None:
+                        self._live_bankroll = bal
+
                 # Clear BTC signal state if expired
                 ts = self.btc_signal_state.get("timestamp")
                 if ts:
@@ -310,23 +403,17 @@ class PolymarketBot:
                         logger.info(f"[{asset}] GATE: at_capacity (max {self.config.MAX_POSITIONS}) — SKIP")
                         break
 
+                    bankroll = self.get_effective_bankroll()
                     edge_result = await self.strategy_router.route(
                         market,
                         self.binance_feed,
                         self.btc_signal_state,
+                        bankroll=bankroll,
                     )
 
                     # Risk checks (only when edge found): daily loss limit, per-trade limit
                     can_trade = True
                     if edge_result.has_edge:
-                        bankroll = self.config.BANKROLL
-                        if self.config.PAPER_TRADING:
-                            try:
-                                from state_writer import _compute_bankroll_from_trades, _read_starting_bankroll
-                                starting = _read_starting_bankroll(self.config.BANKROLL)
-                                bankroll = _compute_bankroll_from_trades(starting)
-                            except Exception:
-                                bankroll = self.config.BANKROLL
                         self.risk_manager.reset_daily_at_midnight()
                         capped_size = min(
                             edge_result.kelly_size,
@@ -362,7 +449,7 @@ class PolymarketBot:
 
                     actually_entered = False
                     if edge_result.has_edge and can_trade:
-                        if self.position_manager.would_exceed_portfolio_risk(edge_result.kelly_size):
+                        if self.position_manager.would_exceed_portfolio_risk(edge_result.kelly_size, bankroll):
                             logger.info(
                                 f"[{asset}] GATE: portfolio_risk — would exceed {self.config.MAX_PORTFOLIO_RISK:.0%} "
                                 f"(current: ${self.position_manager.total_open_exposure_usdc():.0f})"
@@ -389,14 +476,7 @@ class PolymarketBot:
             except Exception as e:
                 logger.error(f"Scan loop error: {e}", exc_info=True)
 
-            bankroll_for_state = self.config.BANKROLL
-            if self.config.PAPER_TRADING:
-                try:
-                    from state_writer import _compute_bankroll_from_trades, _read_starting_bankroll
-                    starting = _read_starting_bankroll(self.config.BANKROLL)
-                    bankroll_for_state = _compute_bankroll_from_trades(starting)
-                except Exception:
-                    pass
+            bankroll_for_state = self.get_effective_bankroll()
             risk_state = self.risk_manager.get_state(bankroll_for_state)
             write_state(
                 self.position_manager,
@@ -504,7 +584,7 @@ class PolymarketBot:
         write_state(
             self.position_manager,
             self.signal_feed,
-            self.config.BANKROLL,
+            self.get_effective_bankroll(),
             running=False,
             start_time=self.start_time,
             paper_trading=self.config.PAPER_TRADING,

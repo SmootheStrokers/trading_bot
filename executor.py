@@ -1,8 +1,10 @@
 """
 executor.py — Places orders on the Polymarket CLOB.
 Handles order signing (EIP-712), slippage checks, and order confirmation.
+Uses py-clob-client for live orders (EIP-712 signing required by Polymarket).
 """
 
+import asyncio
 import logging
 import time
 from typing import Optional, Tuple
@@ -14,10 +16,40 @@ from models import Market, EdgeResult, Side
 logger = logging.getLogger("executor")
 
 
+def _make_py_clob_client(config: BotConfig):
+    """Create the official py-clob-client for EIP-712 signed order placement."""
+    from py_clob_client.client import ClobClient as PyClobClient
+    from py_clob_client.clob_types import ApiCreds
+
+    creds = ApiCreds(
+        api_key=config.API_KEY,
+        api_secret=config.API_SECRET,
+        api_passphrase=config.API_PASSPHRASE,
+    )
+    # EOA: signature_type=0. Polymarket proxy: signature_type=1, funder=proxy wallet.
+    sig_type = 1 if getattr(config, "PROXY_WALLET", None) else 0
+    funder = getattr(config, "PROXY_WALLET", None) or None
+    host = config.CLOB_API_URL.rstrip("/")
+    return PyClobClient(
+        host=host,
+        chain_id=config.CHAIN_ID,
+        key=config.PRIVATE_KEY,
+        creds=creds,
+        signature_type=sig_type,
+        funder=funder,
+    )
+
+
 class OrderExecutor:
     def __init__(self, config: BotConfig, client: ClobClient):
         self.config = config
         self.client = client
+        self._py_clob: Optional[object] = None
+
+    def _get_py_clob(self):
+        if self._py_clob is None:
+            self._py_clob = _make_py_clob_client(self.config)
+        return self._py_clob
 
     async def place_order(self, market: Market, edge: EdgeResult) -> Optional[str]:
         """
@@ -42,13 +74,6 @@ class OrderExecutor:
 
         shares = round(edge.kelly_size / limit_price, 4)
 
-        order_payload = self._build_order_payload(
-            token_id=token_id,
-            price=limit_price,
-            size=shares,
-            side="BUY",
-        )
-
         logger.info(
             f"Placing order: {edge.side.value} {shares:.4f} shares @ {limit_price:.4f} "
             f"(${edge.kelly_size:.2f} USDC) | {market.question[:50]}"
@@ -60,14 +85,27 @@ class OrderExecutor:
             return order_id
 
         try:
-            resp = await self.client.create_order(order_payload)
-            order_id = resp.get("orderID") or resp.get("id")
+            from py_clob_client.clob_types import OrderArgs
+
+            py_client = self._get_py_clob()
+            order_args = OrderArgs(
+                token_id=token_id,
+                price=limit_price,
+                size=shares,
+                side="BUY",
+            )
+            # py-clob-client is sync; run in thread to avoid blocking event loop
+            resp = await asyncio.to_thread(
+                py_client.create_and_post_order,
+                order_args,
+                None,
+            )
+            order_id = resp.get("orderID") or resp.get("id") if isinstance(resp, dict) else None
             if order_id:
                 logger.info(f"Order placed OK | ID: {order_id}")
                 return order_id
-            else:
-                logger.error(f"Order response missing ID: {resp}")
-                return None
+            logger.error(f"Order response missing ID: {resp}")
+            return None
         except Exception as e:
             logger.error(f"Order placement failed: {e}", exc_info=True)
             return None
@@ -104,18 +142,22 @@ class OrderExecutor:
                 f"{market.question[:40]}"
             )
             return yes_id, no_id
-        yes_payload = self._build_order_payload(
-            market.yes_token_id, yes_price, yes_shares, "BUY"
-        )
-        no_payload = self._build_order_payload(
-            market.no_token_id, no_price, no_shares, "BUY"
-        )
         yes_id, no_id = None, None
         try:
-            resp_yes = await self.client.create_order(yes_payload)
-            yes_id = resp_yes.get("orderID") or resp_yes.get("id")
-            resp_no = await self.client.create_order(no_payload)
-            no_id = resp_no.get("orderID") or resp_no.get("id")
+            from py_clob_client.clob_types import OrderArgs
+
+            py_client = self._get_py_clob()
+            for token_id, price, shares, label in [
+                (market.yes_token_id, yes_price, yes_shares, "YES"),
+                (market.no_token_id, no_price, no_shares, "NO"),
+            ]:
+                order_args = OrderArgs(token_id=token_id, price=price, size=shares, side="BUY")
+                resp = await asyncio.to_thread(py_client.create_and_post_order, order_args, None)
+                oid = resp.get("orderID") or resp.get("id") if isinstance(resp, dict) else None
+                if label == "YES":
+                    yes_id = oid
+                else:
+                    no_id = oid
             logger.info(f"Maker pair placed | YES {yes_id} NO {no_id}")
         except Exception as e:
             logger.error(f"Maker pair failed: {e}", exc_info=True)
@@ -126,7 +168,8 @@ class OrderExecutor:
             logger.info(f"PAPER TRADING: Simulated cancel for {order_id}")
             return True
         try:
-            await self.client.cancel_order(order_id)
+            py_client = self._get_py_clob()
+            await asyncio.to_thread(py_client.cancel, order_id)
             logger.info(f"Order {order_id} cancelled")
             return True
         except Exception as e:
@@ -141,19 +184,22 @@ class OrderExecutor:
         label: str = "EXIT"
     ) -> Optional[str]:
         """Place a sell order to exit an existing position."""
-        order_payload = self._build_order_payload(
-            token_id=token_id,
-            price=round(min_price, 4),
-            size=round(shares, 4),
-            side="SELL",
-        )
         if self.config.PAPER_TRADING:
             order_id = f"paper-exit-{int(time.time() * 1000)}"
             logger.info(f"PAPER TRADING: Simulated {label} order | ID: {order_id} | price>={min_price:.4f}")
             return order_id
         try:
-            resp = await self.client.create_order(order_payload)
-            order_id = resp.get("orderID") or resp.get("id")
+            from py_clob_client.clob_types import OrderArgs
+
+            py_client = self._get_py_clob()
+            order_args = OrderArgs(
+                token_id=token_id,
+                price=round(min_price, 4),
+                size=round(shares, 4),
+                side="SELL",
+            )
+            resp = await asyncio.to_thread(py_client.create_and_post_order, order_args, None)
+            order_id = resp.get("orderID") or resp.get("id") if isinstance(resp, dict) else None
             logger.info(f"{label} order placed | ID: {order_id} | price>={min_price:.4f}")
             return order_id
         except Exception as e:

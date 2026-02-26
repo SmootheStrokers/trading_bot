@@ -64,9 +64,10 @@ class PositionManager:
         """Total USDC at risk across all open positions (size_usdc)."""
         return sum(p.size_usdc for p in self.positions.values() if p.is_open)
 
-    def would_exceed_portfolio_risk(self, additional_size_usdc: float) -> bool:
+    def would_exceed_portfolio_risk(self, additional_size_usdc: float, bankroll: Optional[float] = None) -> bool:
         """True if adding this size would exceed MAX_PORTFOLIO_RISK of bankroll."""
-        cap = self.config.BANKROLL * self.config.MAX_PORTFOLIO_RISK
+        br = bankroll if bankroll is not None else self.config.BANKROLL
+        cap = br * self.config.MAX_PORTFOLIO_RISK
         current = self.total_open_exposure_usdc()
         return (current + additional_size_usdc) > cap
 

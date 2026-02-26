@@ -33,7 +33,7 @@ class BotConfig:
     # ── Capital Management ───────────────────────────────────────────────────
     BANKROLL: float = float(os.getenv("BANKROLL", "1000.0"))       # Total capital in USDC
     MAX_KELLY_FRACTION: float = 0.25   # Cap Kelly bet at 25% of full Kelly (safety)
-    MIN_BET_SIZE: float = 5.0          # Minimum order in USDC
+    MIN_BET_SIZE: float = float(os.getenv("MIN_BET_SIZE", "5.0"))  # Minimum order in USDC
     MAX_BET_SIZE: float = 100.0        # Hard cap per trade in USDC (legacy)
     MAX_POSITION_SIZE_USD: float = float(os.getenv("MAX_POSITION_SIZE_USD", "25.0"))  # Cap per trade ($20-25 = 2-2.5% of $1k)
     MAX_POSITIONS: int = int(os.getenv("MAX_POSITIONS", "20"))  # Allow ~$500/$25 = 20 positions at 50% risk

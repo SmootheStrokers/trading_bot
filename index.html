@@ -312,7 +312,7 @@
   }
   .col-left { grid-area: left; display: flex; flex-direction: column; gap: 1px; background: var(--border); }
   .col-center { grid-area: center; display: flex; flex-direction: column; min-height: 0; }
-  .col-right { grid-area: right; display: flex; flex-direction: column; gap: 1px; background: var(--border); }
+  .col-right { grid-area: right; display: flex; flex-direction: column; gap: 1px; background: var(--border); min-height: 0; }
   @media (max-width: 1400px) {
     .main-grid { grid-template-columns: 1fr 1fr; grid-template-areas: "left center" "right right"; }
   }
@@ -558,8 +558,9 @@
   /* Trade log */
   .trade-log {
     overflow-y: auto;
-    max-height: 280px;
     flex: 1;
+    min-height: 0;
+    max-height: 320px;
   }
   .trade-log::-webkit-scrollbar { width: 6px; }
   .trade-log::-webkit-scrollbar-track { background: transparent; }
@@ -879,10 +880,10 @@
     </div>
 
     <!-- RIGHT COLUMN (30%) -->
-    <div class="col-right" style="overflow-y:auto">
-      <div class="panel panel-card" style="flex:1;min-height:0;display:flex;flex-direction:column">
+    <div class="col-right" style="overflow-y:auto;min-height:0">
+      <div class="panel panel-card" style="flex:2;min-height:0;display:flex;flex-direction:column">
         <div class="panel-title">Trade Log <span class="panel-update" id="trades-update">—</span></div>
-        <div class="trade-log" id="trade-log" style="flex:1">
+        <div class="trade-log" id="trade-log" style="flex:1;min-height:0">
           <div class="empty-state" id="trades-empty">No trades yet</div>
         </div>
       </div>
@@ -892,7 +893,7 @@
           <canvas id="winloss-chart"></canvas>
         </div>
       </div>
-      <div class="panel panel-card" style="flex-shrink:0;flex:1;min-height:0;display:flex;flex-direction:column">
+      <div class="panel panel-card" style="flex:1;min-height:0;display:flex;flex-direction:column">
         <div class="panel-title">Live Log <span class="panel-update" id="log-update">—</span></div>
         <div class="log-scroll" id="log-tail" style="flex:1">
           <div class="log-line info">Connecting...</div>

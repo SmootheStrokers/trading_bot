@@ -86,6 +86,7 @@ class EdgeFilter:
         funding_rate: Optional[float] = None,
         btc_is_neutral_or_up: bool = True,
         btc_price_history: Optional[list] = None,
+        bankroll: Optional[float] = None,
     ) -> EdgeResult:
         """
         Run all signal checks and return an EdgeResult.
@@ -200,6 +201,7 @@ class EdgeFilter:
                 ask_ratio=ask_ratio,
                 ob_signal=ob_signal,
                 asset=asset,
+                bankroll=bankroll,
             )
 
         # ── Per-asset signal count ─────────────────────────────────────────────
@@ -598,6 +600,7 @@ class EdgeFilter:
         ask_ratio: float = 0.0,
         ob_signal: bool = False,
         asset: str = "",
+        bankroll: Optional[float] = None,
     ) -> Tuple[float, float, float, float, bool]:
         """
         Estimate true probability vs. implied market probability.
@@ -659,7 +662,8 @@ class EdgeFilter:
             base_pct = min(0.08, max(0.02, kelly_edge + 0.02))
             frac = base_pct
 
-        raw_size = frac * self.config.BANKROLL
+        br = bankroll if bankroll is not None else self.config.BANKROLL
+        raw_size = frac * br
         max_size = getattr(self.config, "MAX_POSITION_SIZE_USD", self.config.MAX_BET_SIZE)
         kelly_size = max(
             self.config.MIN_BET_SIZE,

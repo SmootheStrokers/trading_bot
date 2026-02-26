@@ -4,12 +4,14 @@ Handles auth, request signing, and raw API calls.
 """
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import time
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlencode
 
 import aiohttp
 from config import BotConfig
@@ -51,21 +53,30 @@ class ClobClient:
         return self._session
 
     def _sign_request(self, method: str, path: str, body: str = "") -> Dict[str, str]:
-        """Generate CLOB API auth headers using HMAC-SHA256."""
+        """Generate CLOB API auth headers using HMAC-SHA256 (Polymarket L2 spec)."""
         timestamp = str(int(time.time() * 1000))
-        message = timestamp + method.upper() + path + body
-        signature = hmac.new(
-            self.config.API_SECRET.encode(),
-            message.encode(),
-            hashlib.sha256
-        ).hexdigest()
-        return {
+        message = str(timestamp) + method.upper() + path
+        if body:
+            message += str(body).replace("'", '"')
+        # Secret from Polymarket is base64-encoded; decode before HMAC
+        try:
+            secret_bytes = base64.urlsafe_b64decode(self.config.API_SECRET)
+        except Exception as e:
+            raise ValueError(f"Invalid POLY_API_SECRET (expected base64): {e}") from e
+        h = hmac.new(secret_bytes, message.encode("utf-8"), hashlib.sha256)
+        signature = base64.urlsafe_b64encode(h.digest()).decode("utf-8")
+        headers = {
             "POLY-API-KEY": self.config.API_KEY,
             "POLY-PASSPHRASE": self.config.API_PASSPHRASE,
             "POLY-TIMESTAMP": timestamp,
             "POLY-SIGNATURE": signature,
             "Content-Type": "application/json",
         }
+        # POLY_ADDRESS (Polygon signer/funder) required for authenticated endpoints
+        addr = getattr(self.config, "PROXY_WALLET", None)
+        if addr:
+            headers["POLY-ADDRESS"] = addr if addr.startswith("0x") else f"0x{addr}"
+        return headers
 
     def _is_rate_limited(self, e: Exception) -> bool:
         s = str(e).lower()
@@ -85,8 +96,15 @@ class ClobClient:
             await asyncio.sleep(self._request_delay - elapsed)
         self._last_request_time = datetime.utcnow()
 
+        # Path for HMAC must match request; include query string when params present
+        signed_path = path
+        if params and any(v for v in params.values()):
+            filtered = {k: v for k, v in params.items() if v is not None and v != ""}
+            if filtered:
+                signed_path = f"{path}?{urlencode(filtered)}"
+
         session = self._get_session()
-        headers = self._sign_request("GET", path)
+        headers = self._sign_request("GET", signed_path)
         url = f"{self.base_url}{path}"
         max_attempts = self.config.RETRY_ATTEMPTS + 2  # Extra retries for 429
         for attempt in range(max_attempts):
@@ -213,8 +231,8 @@ class ClobClient:
     # ── Account ───────────────────────────────────────────────────────────────
 
     async def get_balance(self) -> Dict:
-        """Get USDC balance."""
-        return await self._get("/balance")
+        """Get USDC balance and allowance. Uses /balance-allowance (CLOB API)."""
+        return await self._get("/balance-allowance")
 
     async def get_positions(self) -> List[Dict]:
         """Get current token positions from the Polymarket Data API."""
