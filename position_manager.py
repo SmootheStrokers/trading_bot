@@ -218,11 +218,11 @@ class PositionManager:
     # ── Trade Logging ─────────────────────────────────────────────────────────
 
     def _get_trade_log_path(self) -> Path:
-        """Resolve trades.csv to project root so VM always writes to correct path."""
+        """Resolve trades.csv to project root so bot and dashboard read same file."""
         p = Path(self.config.TRADE_LOG_FILE)
         if p.is_absolute():
             return p
-        return Path(__file__).resolve().parent / p
+        return Path(__file__).resolve().parent / p.name
 
     def _init_trade_log(self):
         try:

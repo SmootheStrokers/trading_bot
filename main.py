@@ -61,6 +61,8 @@ class PolymarketBot:
             "window_open_price": 0.0,
         }
         self.maker_positions: dict = {}  # condition_id -> {"yes_id", "no_id", "placed_at"}
+        self._last_num_markets = 0
+        self._last_markets_with_edge = 0
 
     async def run(self):
         logger.info("=" * 60)
@@ -104,6 +106,7 @@ class PolymarketBot:
                 self.position_manager.monitor_loop(),
                 self.catalyst_watcher(),
                 self.report_scheduler_loop(),
+                self._state_writer_loop(),
             )
         finally:
             await self._cleanup()
@@ -171,6 +174,41 @@ class PolymarketBot:
                 if path.exists():
                     logger.debug(f"catalyst_flag parse error: {e}")
 
+    async def _state_writer_loop(self):
+        """Write bot_state.json every 8 seconds for dashboard real-time updates."""
+        while self.running:
+            try:
+                await asyncio.sleep(8)
+                if not self.running:
+                    break
+                bankroll_for_state = self.config.BANKROLL
+                if self.config.PAPER_TRADING:
+                    try:
+                        from state_writer import _compute_bankroll_from_trades, _read_starting_bankroll
+                        starting = _read_starting_bankroll(self.config.BANKROLL)
+                        bankroll_for_state = _compute_bankroll_from_trades(starting)
+                    except Exception:
+                        pass
+                risk_state = self.risk_manager.get_state(bankroll_for_state)
+                write_state(
+                    self.position_manager,
+                    self.signal_feed,
+                    bankroll_for_state,
+                    running=self.running,
+                    start_time=self.start_time,
+                    paper_trading=self.config.PAPER_TRADING,
+                    btc_signal_state=self.btc_signal_state,
+                    markets_last_scan=self._last_num_markets,
+                    maker_active=self.config.MAKER_MODE_ENABLED and self._is_maker_hours(),
+                    markets_with_edge=self._last_markets_with_edge,
+                    risk_state=risk_state,
+                    daily_pnl=risk_state.get("daily_pnl"),
+                )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug(f"State writer loop: {e}")
+
     def _is_maker_hours(self) -> bool:
         try:
             from zoneinfo import ZoneInfo
@@ -237,6 +275,7 @@ class PolymarketBot:
 
                 markets = await self.scanner.fetch_active_15min_markets()
                 num_markets = len(markets)
+                self._last_num_markets = num_markets
                 markets_with_edge = 0
                 logger.info(f"Scanned {num_markets} active 15-min markets")
 
@@ -338,6 +377,7 @@ class PolymarketBot:
                     if edge_result.has_edge:
                         markets_with_edge += 1
                     self._append_signal_feed(market, edge_result, entered=actually_entered)
+                self._last_markets_with_edge = markets_with_edge
 
             except Exception as e:
                 logger.error(f"Scan loop error: {e}", exc_info=True)
@@ -411,8 +451,11 @@ class PolymarketBot:
         except Exception as e:
             logger.error(f"Force test trade failed: {e}", exc_info=True)
 
-    def _asset(self, question: str) -> str:
-        q = (question or "").lower()
+    def _asset(self, question) -> str:
+        """Extract asset (BTC/ETH/SOL/XRP) from question string or Market object."""
+        if hasattr(question, "question"):
+            question = question.question
+        q = (str(question) if question is not None else "").lower()
         if "bitcoin" in q or "btc" in q:
             return "BTC"
         if "ethereum" in q or "eth" in q:

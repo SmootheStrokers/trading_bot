@@ -15,16 +15,19 @@ if TYPE_CHECKING:
     from position_manager import PositionManager
 
 logger = logging.getLogger("state_writer")
-STATE_FILE = Path("bot_state.json")
-SESSION_START_FILE = Path("session_start.json")
+# Use project root so bot and dashboard server read same file
+_BASE = Path(__file__).resolve().parent
+STATE_FILE = _BASE / "bot_state.json"
+SESSION_START_FILE = _BASE / "session_start.json"
 
 
 def _trades_csv_path() -> Path:
     try:
         from config import BotConfig
-        return Path(BotConfig().TRADE_LOG_FILE)
+        p = Path(BotConfig().TRADE_LOG_FILE)
+        return p if p.is_absolute() else _BASE / p
     except Exception:
-        return Path("trades.csv")
+        return _BASE / "trades.csv"
 
 
 def _read_starting_bankroll(initial: float) -> float:

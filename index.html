@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>POLY — Trading Terminal</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
   :root {
@@ -29,10 +30,10 @@
     --amber-dim: rgba(251,191,36,0.1);
     --magenta: #e879f9;
     --text: #f0f0f8;
-    --text-dim: #4a4a6a;
-    --text-mid: #7878a0;
+    --text-dim: #6a6a8a;
+    --text-mid: #9090b0;
     --mono: 'JetBrains Mono', monospace;
-    --sans: 'Orbitron', sans-serif;
+    --sans: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -41,10 +42,12 @@
     background: var(--bg);
     color: var(--text);
     font-family: var(--sans);
-    font-size: 13px;
-    line-height: 1.5;
+    font-size: 15px;
+    line-height: 1.6;
     min-height: 100vh;
     overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
   /* Epic cinematic background */
@@ -138,7 +141,7 @@
 
   .logo {
     font-family: var(--mono);
-    font-size: 18px;
+    font-size: 20px;
     font-weight: 700;
     letter-spacing: -0.03em;
     background: linear-gradient(135deg, var(--blue) 0%, var(--cyan) 50%, var(--magenta) 100%);
@@ -176,16 +179,16 @@
   .hstat:last-of-type { border-right: none; }
 
   .hstat-label {
-    font-size: 9px;
+    font-size: 11px;
     color: var(--text-dim);
-    letter-spacing: 0.15em;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
     margin-bottom: 4px;
   }
 
   .hstat-value {
     font-family: var(--mono);
-    font-size: 16px;
+    font-size: 18px;
     font-weight: 700;
     letter-spacing: -0.02em;
   }
@@ -194,7 +197,7 @@
   .hstat-value.blue { color: var(--blue); text-shadow: 0 0 16px var(--blue-glow); }
   .hstat-value.glowing-green { color: var(--green); text-shadow: 0 0 24px var(--green-glow), 0 0 48px rgba(0,255,136,0.25); }
   .hstat-value.glowing-red { color: var(--red); text-shadow: 0 0 24px var(--red-glow), 0 0 48px rgba(255,51,102,0.25); }
-  .hstat-sub { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+  .hstat-sub { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
 
   .cycle-timer-wrap {
     display: flex;
@@ -204,8 +207,8 @@
     border-right: 1px solid var(--border);
     min-width: 100px;
   }
-  .cycle-label { font-size: 9px; color: var(--text-dim); letter-spacing: 0.1em; text-transform: uppercase; }
-  .cycle-value { font-family: var(--mono); font-size: 15px; font-weight: 700; color: var(--blue); text-shadow: 0 0 12px var(--blue-glow); }
+  .cycle-label { font-size: 11px; color: var(--text-dim); letter-spacing: 0.08em; text-transform: uppercase; }
+  .cycle-value { font-family: var(--mono); font-size: 17px; font-weight: 700; color: var(--blue); text-shadow: 0 0 12px var(--blue-glow); }
   .cycle-bar { width: 100%; height: 4px; background: var(--bg3); border-radius: 2px; overflow: hidden; }
   .cycle-bar-fill { height: 100%; background: linear-gradient(90deg, var(--blue), var(--cyan)); border-radius: 2px; transition: width 1s linear; box-shadow: 0 0 8px var(--blue-glow); }
 
@@ -221,16 +224,16 @@
     flex-direction: column;
     align-items: flex-end;
     font-family: var(--mono);
-    font-size: 12px;
+    font-size: 14px;
   }
   .clock-utc { color: var(--blue); font-weight: 600; text-shadow: 0 0 10px rgba(0,212,255,0.3); }
-  .clock-local { font-size: 10px; color: var(--text-dim); }
+  .clock-local { font-size: 11px; color: var(--text-dim); }
 
   .conn-indicator {
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-dim);
   }
   .conn-dot {
@@ -254,9 +257,9 @@
     gap: 10px;
     padding: 8px 18px;
     border-radius: 6px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
     transition: all 0.3s ease;
   }
@@ -358,9 +361,9 @@
   .panel-card:hover::before { opacity: 1; }
 
   .panel-title {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
-    letter-spacing: 0.16em;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
     color: var(--text-dim);
     display: flex;
@@ -383,7 +386,7 @@
     0%, 100% { opacity: 1; box-shadow: 0 0 10px var(--blue-glow); }
     50% { opacity: 0.8; box-shadow: 0 0 16px var(--blue-glow); }
   }
-  .panel-update { font-size: 9px; color: var(--text-dim); margin-left: auto; }
+  .panel-update { font-size: 11px; color: var(--text-dim); margin-left: auto; }
 
   /* Left column panels */
   .col-left .panel { background: var(--bg); }
@@ -418,7 +421,7 @@
     border: 1px solid rgba(255,255,255,0.05);
     border-radius: 8px;
     margin-bottom: 10px;
-    font-size: 11px;
+    font-size: 13px;
     transition: all 0.3s ease;
   }
   .strategy-card:hover {
@@ -426,7 +429,7 @@
     box-shadow: 0 0 20px rgba(0,212,255,0.05);
   }
   .strategy-name { font-weight: 600; color: var(--text); }
-  .strategy-meta { font-size: 10px; color: var(--text-dim); margin-top: 5px; }
+  .strategy-meta { font-size: 12px; color: var(--text-dim); margin-top: 5px; }
 
   .report-item:hover { background: rgba(0,212,255,0.08); }
 
@@ -449,8 +452,8 @@
     border-color: rgba(0,212,255,0.25);
     box-shadow: 0 0 16px rgba(0,212,255,0.08);
   }
-  .perf-metric-label { font-size: 9px; color: var(--text-dim); letter-spacing: 0.1em; }
-  .perf-metric-val { font-family: var(--mono); font-size: 13px; font-weight: 700; }
+  .perf-metric-label { font-size: 11px; color: var(--text-dim); letter-spacing: 0.08em; }
+  .perf-metric-val { font-family: var(--mono); font-size: 15px; font-weight: 700; }
   .perf-metric-val.pos { color: var(--green); text-shadow: 0 0 10px rgba(0,255,136,0.3); }
   .perf-metric-val.neg { color: var(--red); text-shadow: 0 0 10px rgba(255,51,102,0.3); }
 
@@ -486,14 +489,14 @@
   .positions-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 11px;
+    font-size: 13px;
   }
   .positions-table th {
     text-align: left;
     padding: 10px 12px;
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 700;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
     color: var(--text-dim);
     border-bottom: 1px solid rgba(255,255,255,0.08);
@@ -511,23 +514,23 @@
   @keyframes row-pulse-red { 0% { background: rgba(255,51,85,0.15); } 100% { background: transparent; } }
 
   .badge-yes {
-    padding: 3px 8px;
+    padding: 4px 9px;
     border-radius: 4px;
     background: linear-gradient(135deg, rgba(0,255,136,0.15) 0%, rgba(0,255,136,0.05) 100%);
     border: 1px solid rgba(0,255,136,0.3);
     color: var(--green);
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.05em;
     text-shadow: 0 0 10px rgba(0,255,136,0.3);
   }
   .badge-no {
-    padding: 3px 8px;
+    padding: 4px 9px;
     border-radius: 4px;
     background: linear-gradient(135deg, rgba(255,51,102,0.15) 0%, rgba(255,51,102,0.05) 100%);
     border: 1px solid rgba(255,51,102,0.3);
     color: var(--red);
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.05em;
   }
@@ -541,7 +544,7 @@
     justify-content: center;
     padding: 48px 24px;
     color: var(--text-dim);
-    font-size: 12px;
+    font-size: 14px;
     letter-spacing: 0.05em;
   }
   .empty-state::before {
@@ -569,7 +572,7 @@
     gap: 8px;
     align-items: center;
     padding: 10px 12px;
-    font-size: 11px;
+    font-size: 13px;
     border-bottom: 1px solid rgba(255,255,255,0.04);
     transition: all 0.3s ease;
     animation: tradeSlideIn 0.35s ease;
@@ -593,7 +596,7 @@
     overflow-y: auto;
     max-height: 200px;
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: 12px;
     line-height: 1.6;
   }
   .log-scroll::-webkit-scrollbar { width: 4px; }
@@ -609,12 +612,26 @@
     align-items: center;
     padding: 8px 0;
     border-bottom: 1px solid rgba(255,255,255,0.04);
-    font-size: 12px;
+    font-size: 14px;
   }
   .market-label { color: var(--text-dim); }
   .market-val { font-family: var(--mono); font-weight: 600; }
   .market-val.up { color: var(--green); }
   .market-val.down { color: var(--red); }
+
+  .crypto-pnl-row {
+    display: grid;
+    grid-template-columns: 48px 1fr 1fr 1fr;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-size: 13px;
+  }
+  .crypto-pnl-row:last-child { border-bottom: none; }
+  .crypto-name { font-weight: 700; font-family: var(--mono); }
+  .crypto-trades, .crypto-wr { color: var(--text-mid); font-family: var(--mono); }
+  .crypto-pnl { font-family: var(--mono); font-weight: 600; }
 
   .charts-row {
     display: grid;
@@ -640,14 +657,14 @@
   .chart-icon {
     color: var(--blue);
     margin-right: 6px;
-    font-size: 10px;
+    font-size: 12px;
     animation: iconPulse 2s ease-in-out infinite;
   }
   @keyframes iconPulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.6; }
   }
-  .chart-wrap { height: 100px; }
+  .chart-wrap { height: 120px; min-height: 100px; }
   @media (max-width: 1200px) {
     .charts-row { grid-template-columns: 1fr 1fr; }
   }
@@ -750,13 +767,15 @@
           <div class="risk-gauge">
             <div class="risk-gauge-fill safe" id="risk-gauge-fill" style="width:0%"></div>
           </div>
-          <span id="risk-pct" style="font-size:10px;color:var(--text-dim)">0%</span>
+          <span id="risk-pct" style="font-size:12px;color:var(--text-dim)">0%</span>
         </div>
-        <div style="font-size:10px;color:var(--text-dim);margin-bottom:12px">Daily loss limit used</div>
+        <div style="font-size:12px;color:var(--text-dim);margin-bottom:12px">Daily loss limit used</div>
         <div id="health-content">
           <div class="market-row"><span class="market-label">Status</span><span class="market-val" id="health-status">—</span></div>
           <div class="market-row"><span class="market-label">Trades/Hour</span><span class="market-val" id="health-trades-hr">—</span></div>
           <div class="market-row"><span class="market-label">Min Edge</span><span class="market-val" id="health-min-edge">—</span></div>
+          <div class="market-row"><span class="market-label">BTC Funding</span><span class="market-val" id="health-btc-funding">—</span></div>
+          <div class="market-row"><span class="market-label">ETH Funding</span><span class="market-val" id="health-eth-funding">—</span></div>
         </div>
         <div class="strategy-cards" id="strategy-cards">
           <div class="strategy-card"><span class="strategy-name">BTC Signal</span><span class="strategy-meta" id="strat-btc">—</span></div>
@@ -805,6 +824,15 @@
           <div class="market-row"><span class="market-label">Markets w/ Edge</span><span class="market-val" id="market-edge">—</span></div>
         </div>
       </div>
+      <div class="panel panel-card">
+        <div class="panel-title">P&L by Cryptocurrency <span class="panel-update" id="pnl-crypto-update">—</span></div>
+        <div id="pnl-by-crypto">
+          <div class="crypto-pnl-row" data-asset="BTC"><span class="crypto-name" style="color:#f7931a">BTC</span><span class="crypto-trades">—</span><span class="crypto-wr">—</span><span class="crypto-pnl">—</span></div>
+          <div class="crypto-pnl-row" data-asset="ETH"><span class="crypto-name" style="color:#627eea">ETH</span><span class="crypto-trades">—</span><span class="crypto-wr">—</span><span class="crypto-pnl">—</span></div>
+          <div class="crypto-pnl-row" data-asset="SOL"><span class="crypto-name" style="color:#9945ff">SOL</span><span class="crypto-trades">—</span><span class="crypto-wr">—</span><span class="crypto-pnl">—</span></div>
+          <div class="crypto-pnl-row" data-asset="XRP"><span class="crypto-name" style="color:#00aae4">XRP</span><span class="crypto-trades">—</span><span class="crypto-wr">—</span><span class="crypto-pnl">—</span></div>
+        </div>
+      </div>
     </div>
 
     <!-- CENTER COLUMN (40%) -->
@@ -836,14 +864,14 @@
 
       <div class="panel-title" style="margin-top:12px">Goal Progress</div>
       <div class="panel-card goal-card">
-        <div style="display:flex;justify-content:space-between;margin-bottom:10px;font-size:12px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:10px;font-size:14px">
           <span style="color:var(--text-dim)">Daily P&L</span>
           <span id="goal-daily-pnl" style="font-weight:700;text-shadow:0 0 12px currentColor">—</span>
         </div>
         <div class="goal-bar-track">
           <div id="goal-bar-fill" class="goal-bar-fill" style="width:0%"></div>
         </div>
-        <div style="font-size:11px;color:var(--text-dim);margin-top:8px"><span id="goal-progress-text">$0 / $1,000 — 0%</span></div>
+        <div style="font-size:13px;color:var(--text-dim);margin-top:8px"><span id="goal-progress-text">$0 / $1,000 — 0%</span></div>
       </div>
     </div>
 
@@ -914,7 +942,7 @@
   <div class="reports-section" style="margin-top:24px;padding:20px;background:var(--bg2);border:1px solid var(--border);border-radius:12px;">
     <div class="panel-title" style="margin-bottom:16px;">
       <span>Reports</span>
-      <button id="btn-generate-report" class="btn-generate-report" style="margin-left:auto;padding:8px 16px;background:var(--blue);color:var(--bg);border:none;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">Generate Now</button>
+      <button id="btn-generate-report" class="btn-generate-report" style="margin-left:auto;padding:8px 16px;background:var(--blue);color:var(--bg);border:none;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;">Generate Now</button>
     </div>
     <div class="reports-list" id="reports-list" style="max-height:280px;overflow-y:auto;">
       <div class="empty-state" id="reports-empty">No reports yet. Click "Generate Now" to create one.</div>
@@ -1054,8 +1082,8 @@ function initCharts() {
             borderColor: 'rgba(0,212,255,0.4)',
             borderWidth: 1,
             padding: 12,
-            titleFont: { size: 11 },
-            bodyFont: { size: 13, family: 'JetBrains Mono' },
+            titleFont: { size: 13 },
+            bodyFont: { size: 15, family: 'JetBrains Mono' },
             callbacks: { label: c => c.raw != null ? `$${Number(c.raw).toFixed(2)}` : '' }
           }
         },
@@ -1063,7 +1091,7 @@ function initCharts() {
           x: { display: false },
           y: {
             grid: { color: 'rgba(255,255,255,0.03)' },
-            ticks: { color: '#4a4a6a', font: { size: 10 }, callback: v => '$' + v }
+            ticks: { color: '#6a6a8a', font: { size: 12 }, callback: v => '$' + v }
           }
         }
       }
@@ -1415,6 +1443,14 @@ function renderHealth(s) {
     makerEl.style.color = s.bot_activity?.maker_active ? 'var(--green)' : 'var(--text-dim)';
   }
 
+  // Funding rates in health (from marketPrices - passed via renderMarket, we need to get from global)
+  const setFunding = (id, v) => {
+    const e = document.getElementById(id);
+    if (e) e.textContent = v != null && v !== '' ? Number(v).toFixed(4) + '%' : '—';
+  };
+  setFunding('health-btc-funding', marketPrices?.btc_funding);
+  setFunding('health-eth-funding', marketPrices?.eth_funding);
+
   const up = document.getElementById('health-update');
   if (up && hasReceivedData) up.textContent = new Date().toLocaleTimeString('en-US', { hour12: false });
 }
@@ -1430,6 +1466,33 @@ function renderPerf(s) {
   set('perf-max-loss', stats.largest_loss != null ? '$' + stats.largest_loss.toFixed(2) : '—');
   set('perf-streak', stats.streak && stats.streak_type ? stats.streak + ' ' + stats.streak_type : '—');
   const up = document.getElementById('perf-update');
+  if (up && hasReceivedData) up.textContent = new Date().toLocaleTimeString('en-US', { hour12: false });
+}
+
+// ── Render P&L by Crypto ───────────────────────────────────────────────────
+const CRYPTO_COLORS = { BTC: '#f7931a', ETH: '#627eea', SOL: '#9945ff', XRP: '#00aae4' };
+
+function renderPnlByCrypto(data) {
+  const byCrypto = data?.by_crypto || data;
+  if (!byCrypto) return;
+  ['BTC', 'ETH', 'SOL', 'XRP'].forEach(asset => {
+    const row = document.querySelector(`.crypto-pnl-row[data-asset="${asset}"]`);
+    if (!row) return;
+    const d = byCrypto[asset] || { trades: 0, win_rate: 0, pnl: 0 };
+    const nameEl = row.querySelector('.crypto-name');
+    if (nameEl) nameEl.style.color = CRYPTO_COLORS[asset] || '#00d4ff';
+    const tradesEl = row.querySelector('.crypto-trades');
+    if (tradesEl) tradesEl.textContent = d.trades + ' trades';
+    const wrEl = row.querySelector('.crypto-wr');
+    if (wrEl) wrEl.textContent = (d.win_rate != null ? d.win_rate : 0) + '%';
+    const pnlEl = row.querySelector('.crypto-pnl');
+    if (pnlEl) {
+      const p = d.pnl != null ? d.pnl : 0;
+      pnlEl.textContent = (p >= 0 ? '+' : '') + '$' + fmtNum(p);
+      pnlEl.style.color = p >= 0 ? 'var(--green)' : p < 0 ? 'var(--red)' : 'var(--text-mid)';
+    }
+  });
+  const up = document.getElementById('pnl-crypto-update');
   if (up && hasReceivedData) up.textContent = new Date().toLocaleTimeString('en-US', { hour12: false });
 }
 
@@ -1706,6 +1769,7 @@ function connectWS() {
           document.querySelector('.app')?.setAttribute('data-loading', 'false');
           state = { ...state, ...(msg.status || {}) };
           if (Array.isArray(msg.recent_trades) && msg.recent_trades.length > 0) trades = msg.recent_trades;
+          if (msg.market_prices) marketPrices = msg.market_prices;
 
           renderHeader(state);
           renderGoal(state);
@@ -1714,6 +1778,7 @@ function connectWS() {
           renderPositions(state.open_positions || []);
           renderMarket(state, marketPrices);
           renderTrades(trades);
+          if (msg.pnl_by_crypto) renderPnlByCrypto(msg.pnl_by_crypto);
           updateEquityChart();
           updateWinLossChart();
           updateCharts();
@@ -1802,6 +1867,15 @@ async function pollMarketPrices() {
   } catch (_) {}
 }
 
+async function pollPnlByCrypto() {
+  try {
+    const res = await fetch(`${API}/api/pnl-by-crypto`).then(r => r.json()).catch(() => null);
+    if (res && res.by_crypto) {
+      renderPnlByCrypto(res);
+    }
+  } catch (_) {}
+}
+
 // ── Init ────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   initCharts();
@@ -1813,6 +1887,7 @@ document.addEventListener('DOMContentLoaded', () => {
   pollTimers.push(setInterval(pollLogs, interval));
   pollTimers.push(setInterval(pollBalance, interval));
   pollTimers.push(setInterval(pollMarketPrices, interval));
+  pollTimers.push(setInterval(pollPnlByCrypto, interval));
   loadReports();
   pollTimers.push(setInterval(loadReports, 60000));
 
@@ -1827,7 +1902,8 @@ document.addEventListener('DOMContentLoaded', () => {
     fetch(`${API}/api/market-prices`).then(r => r.json()),
     fetch(`${API}/api/balance`).then(r => r.json()),
     fetch(`${API}/api/reports`).then(r => r.json()),
-  ]).then(([s, t, l, p, b, r]) => {
+    fetch(`${API}/api/pnl-by-crypto`).then(r => r.json()),
+  ]).then(([s, t, l, p, b, r, crypto]) => {
     const status = s.status === 'fulfilled' ? s.value : null;
     const tradesRes = t.status === 'fulfilled' ? t.value : null;
     const logsRes = l.status === 'fulfilled' ? l.value : null;
@@ -1840,6 +1916,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (balance && balance.balance_usdc != null) { state.bankroll = balance.balance_usdc; state.starting_bankroll = balance.starting_bankroll; state.session_pnl = balance.session_pnl; renderHeader(state); renderGoal(state); }
     const reportsRes = r.status === 'fulfilled' ? r.value : null;
     if (reportsRes?.reports?.length) renderReportsList(reportsRes.reports);
+    const cryptoRes = crypto.status === 'fulfilled' ? crypto.value : null;
+    if (cryptoRes?.by_crypto) renderPnlByCrypto(cryptoRes);
     updateCharts();
     hasReceivedData = true;
     setConnected(true);

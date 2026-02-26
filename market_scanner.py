@@ -133,7 +133,7 @@ class MarketScanner:
         if not raw.get("acceptingOrders", True):
             return False
 
-        q = market.question.lower()
+        q = str(getattr(market, "question", None) or "").lower()
         updown_keywords = ["above", "below", "higher", "lower", "up", "down", "exceed", "reach", "hit"]
         if not any(kw in q for kw in updown_keywords):
             return False

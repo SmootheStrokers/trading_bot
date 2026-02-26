@@ -30,9 +30,11 @@ class EdgeFilter:
     def __init__(self, config: BotConfig):
         self.config = config
 
-    def _detect_asset(self, question: str) -> str:
+    def _detect_asset(self, question) -> str:
         """Parse market question for asset: BTC, ETH, SOL, XRP, or UNKNOWN."""
-        q = question.lower()
+        if hasattr(question, "question"):
+            question = question.question
+        q = (str(question) if question is not None else "").lower()
         if "bitcoin" in q or "btc" in q:
             return "BTC"
         if "ethereum" in q or "eth" in q:

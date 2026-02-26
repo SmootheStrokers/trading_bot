@@ -374,6 +374,45 @@ async def get_config():
     return get_config_values()
 
 
+def compute_pnl_by_crypto(trades: List[dict]) -> dict:
+    """Compute P&L stats per cryptocurrency (BTC, ETH, SOL, XRP) from trades.csv."""
+    ASSETS = ("BTC", "ETH", "SOL", "XRP")
+    KEYWORDS = {"BTC": ["bitcoin", "btc"], "ETH": ["ethereum", "eth"], "SOL": ["solana", "sol"], "XRP": ["xrp", "ripple"]}
+
+    result = {}
+    for asset in ASSETS:
+        result[asset] = {"trades": 0, "wins": 0, "pnl": 0.0, "win_rate": 0.0}
+
+    closed = [t for t in trades if t.get("pnl_usdc") and str(t.get("pnl_usdc", "")).strip()]
+    for t in closed:
+        q = (t.get("question") or "").lower()
+        pnl = float(t.get("pnl_usdc", 0) or 0)
+        asset = "UNKNOWN"
+        for a, kws in KEYWORDS.items():
+            if any(kw in q for kw in kws):
+                asset = a
+                break
+        if asset in result:
+            result[asset]["trades"] += 1
+            result[asset]["pnl"] += pnl
+            if pnl > 0:
+                result[asset]["wins"] += 1
+
+    for asset in ASSETS:
+        t = result[asset]["trades"]
+        result[asset]["win_rate"] = round(result[asset]["wins"] / t * 100, 1) if t > 0 else 0.0
+        result[asset]["pnl"] = round(result[asset]["pnl"], 2)
+
+    return result
+
+
+@app.get("/api/pnl-by-crypto")
+async def get_pnl_by_crypto():
+    """P&L breakdown by cryptocurrency (BTC, ETH, SOL, XRP) from trades.csv."""
+    trades = read_trades()
+    return {"by_crypto": compute_pnl_by_crypto(trades)}
+
+
 @app.get("/api/market-prices")
 async def get_market_prices():
     """BTC/ETH price and funding rates from CoinGecko + Binance. May fail in geo-restricted regions."""
@@ -688,6 +727,31 @@ async def get_chart_data():
     }
 
 
+async def _fetch_market_prices() -> dict:
+    """Fetch BTC/ETH prices and funding rates for dashboard. Cached briefly."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            result = {"btc_usd": None, "eth_usd": None, "btc_funding": None, "eth_funding": None}
+            url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd"
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    result["btc_usd"] = data.get("bitcoin", {}).get("usd")
+                    result["eth_usd"] = data.get("ethereum", {}).get("usd")
+            for sym, key in [("BTCUSDT", "btc_funding"), ("ETHUSDT", "eth_funding")]:
+                try:
+                    furl = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={sym}"
+                    async with session.get(furl, timeout=aiohttp.ClientTimeout(total=3)) as fr:
+                        if fr.status == 200:
+                            fd = await fr.json()
+                            result[key] = round(float(fd.get("lastFundingRate", 0)) * 100, 4)
+                except Exception:
+                    pass
+            return result
+    except Exception:
+        return {}
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
@@ -698,6 +762,8 @@ async def websocket_endpoint(websocket: WebSocket):
             logs = await tail_log(50)
             today = datetime.utcnow().date().isoformat()
             stats = compute_trade_stats(trades, today)
+            market_prices = await _fetch_market_prices()
+            pnl_by_crypto = compute_pnl_by_crypto(trades)
 
             live_balance = await fetch_live_balance()
             bankroll = float(state.get("bankroll", 1000.0))
@@ -744,6 +810,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 "recent_trades": trades[-100:],
                 "signal_feed": state.get("signal_feed", []),
                 "logs": logs[-50:],
+                "market_prices": market_prices,
+                "pnl_by_crypto": pnl_by_crypto,
                 "timestamp": datetime.utcnow().isoformat(),
             }
             await websocket.send_json(payload)
