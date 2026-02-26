@@ -30,7 +30,7 @@ def _parse_clob_position(raw: dict) -> Optional[tuple]:
     Parse CLOB position dict into (token_id, size, condition_id?, avg_price?).
     Polymarket may return: asset_id/token_id, size, condition_id, avgPrice, etc.
     """
-    token_id = raw.get("asset_id") or raw.get("token_id") or raw.get("assetID")
+    token_id = raw.get("asset_id") or raw.get("token_id") or raw.get("assetID") or raw.get("asset")
     size = raw.get("size")
     if token_id is None or size is None:
         return None
@@ -122,9 +122,11 @@ class OrphanHandler:
                 continue
             entry_price = avg_price if avg_price and avg_price > 0 else (0.5 if side == Side.YES else 0.5)
             size_usdc = size * entry_price if entry_price > 0 else 0
+            # Prefer API's conditionId when present (exact match for this position)
+            condition_id = _cond_id or market.condition_id
             orphans.append({
                 "token_id": token_id,
-                "condition_id": market.condition_id,
+                "condition_id": condition_id,
                 "question": market.question,
                 "side": side,
                 "shares": size,

@@ -288,7 +288,7 @@ class TestOBImbalanceNoSide(unittest.TestCase):
             yes_bids=[OrderBookLevel(0.35, 400)],
             yes_asks=[OrderBookLevel(0.65, 600)],
         )
-        signal, side = filter_._check_order_book_imbalance(yes_ob, no_ob)
+        signal, side, _, _ = filter_._check_order_book_imbalance(yes_ob, no_ob)
         self.assertTrue(signal)
         self.assertEqual(side, Side.YES)
 
@@ -303,7 +303,7 @@ class TestOBImbalanceNoSide(unittest.TestCase):
             yes_bids=[OrderBookLevel(0.65, 600)],
             yes_asks=[OrderBookLevel(0.35, 400)],
         )
-        signal, side = filter_._check_order_book_imbalance(yes_ob, no_ob)
+        signal, side, _, _ = filter_._check_order_book_imbalance(yes_ob, no_ob)
         self.assertFalse(signal)
 
 

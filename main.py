@@ -297,7 +297,7 @@ class PolymarketBot:
                     can_trade = True  # Reset per market; risk checks may set False
                     asset = self._asset(market.question)
                     if self.position_manager.has_position(market.condition_id):
-                        logger.info(f"[{asset}] GATE: has_position — SKIP {market.question[:40]}")
+                        logger.info(f"[{asset}] GATE: has_position (condition_id={market.condition_id[:16]}...) — SKIP {market.question[:40]}")
                         continue
                     if self.position_manager.at_capacity():
                         logger.info(f"[{asset}] GATE: at_capacity (max {self.config.MAX_POSITIONS}) — SKIP")

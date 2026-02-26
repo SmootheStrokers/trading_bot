@@ -171,7 +171,7 @@ class EdgeFilter:
                 )
 
         # ── Base signals 1–4 ──────────────────────────────────────────────────
-        ob_signal, ob_side = self._check_order_book_imbalance(
+        ob_signal, ob_side, bid_ratio, ask_ratio = self._check_order_book_imbalance(
             market.order_book, market.no_order_book, asset=asset
         )
         mom_signal, mom_side = self._check_momentum(market, asset=asset)
@@ -193,7 +193,14 @@ class EdgeFilter:
         elif funding_rate is not None and funding_rate < -0.0005 and consensus_side == Side.YES:
             kelly_boost = getattr(self.config, "BASE_KELLY_BOOST", 0.08) + 0.02
         est_prob, implied_prob, kelly_edge, kelly_size, kelly_signal = \
-            self._check_kelly(mid, consensus_side, edge_boost=kelly_boost)
+            self._check_kelly(
+                mid, consensus_side,
+                edge_boost=kelly_boost,
+                bid_ratio=bid_ratio,
+                ask_ratio=ask_ratio,
+                ob_signal=ob_signal,
+                asset=asset,
+            )
 
         # ── Per-asset signal count ─────────────────────────────────────────────
         base_signals = [ob_signal, mom_signal, vol_signal, kelly_signal]
@@ -436,12 +443,13 @@ class EdgeFilter:
 
     def _check_order_book_imbalance(
         self, ob: OrderBook, no_ob: Optional[OrderBook] = None, asset: str = ""
-    ) -> Tuple[bool, Optional[Side]]:
+    ) -> Tuple[bool, Optional[Side], float, float]:
         """
         Compare bid depth vs ask depth across top N levels.
         If bids dominate → YES (price likely to rise).
         If asks dominate → NO (price likely to fall, buy NO = bet against YES).
         When no_ob provided: NO bids heavy = bearish, NO asks heavy = bullish; require agreement.
+        Returns (signal, side, bid_ratio, ask_ratio).
         """
         bid_depth = sum(
             l.price * l.size
@@ -454,7 +462,7 @@ class EdgeFilter:
         total = bid_depth + ask_depth
         if total == 0:
             logger.info(f"[{asset}] OB: bid_ratio=N/A ask_ratio=N/A (total=0) — FAIL")
-            return False, None
+            return False, None, 0.0, 0.0
 
         bid_ratio = bid_depth / total
         ask_ratio = ask_depth / total
@@ -480,27 +488,27 @@ class EdgeFilter:
                     no_side = Side.YES
                 if no_side is not None and no_side != yes_side:
                     logger.info(f"[{asset}] OB: YES/NO sides disagree — FAIL")
-                    return False, None
+                    return False, None, bid_ratio, ask_ratio
 
         if yes_side == Side.YES:
             logger.info(f"[{asset}] OB: bid_ratio={bid_ratio:.2%} (thresh {threshold}) — PASS -> YES")
-            return True, Side.YES
+            return True, Side.YES, bid_ratio, ask_ratio
         elif yes_side == Side.NO:
             logger.info(f"[{asset}] OB: ask_ratio={ask_ratio:.2%} (thresh {threshold}) — PASS -> NO")
-            return True, Side.NO
+            return True, Side.NO, bid_ratio, ask_ratio
 
         # Fallback: when book is balanced but mid is extreme (like trades.csv YES@0.185)
         mid = ob.mid_price
         if mid is not None:
             if mid < 0.42:
                 logger.info(f"[{asset}] OB: mid={mid:.3f} (<0.42) — PASS mid-extreme -> YES")
-                return True, Side.YES
+                return True, Side.YES, bid_ratio, ask_ratio
             if mid > 0.58:
                 logger.info(f"[{asset}] OB: mid={mid:.3f} (>0.58) — PASS mid-extreme -> NO")
-                return True, Side.NO
+                return True, Side.NO, bid_ratio, ask_ratio
 
         logger.info(f"[{asset}] OB: bid_ratio={bid_ratio:.2%} ask_ratio={ask_ratio:.2%} (thresh {threshold}) — FAIL")
-        return False, None
+        return False, None, bid_ratio, ask_ratio
 
     # ── Signal 2: Momentum / Price Velocity ───────────────────────────────────
 
@@ -586,25 +594,26 @@ class EdgeFilter:
         mid_price: float,
         side: Optional[Side],
         edge_boost: float = 0.08,
+        bid_ratio: float = 0.0,
+        ask_ratio: float = 0.0,
+        ob_signal: bool = False,
+        asset: str = "",
     ) -> Tuple[float, float, float, float, bool]:
         """
         Estimate true probability vs. implied market probability.
         Use Kelly formula to compute bet size.
 
+        When OB signal is strong (bid_ratio or ask_ratio > 0.52), use that as win_prob
+        since OB pressure is a direct proxy for true probability.
+
         Returns: (estimated_prob, implied_prob, kelly_edge, kelly_size, signal_fired)
 
-        Kelly formula:  f* = (p*(b+1) - 1) / b
-        Where:
-          p = estimated win probability
-          b = net odds (payout / cost - 1)
-          f* = fraction of bankroll to bet
-
-        On a binary market at price X:
-          Cost to buy 1 share of YES = X USDC
-          Payout if YES resolves = 1 USDC
-          Net odds b = (1 - X) / X
+        Edge formula: edge = win_prob - implied_prob
+        Kelly formula: f* = (p*(b+1) - 1) / b  where p=win_prob, b=net odds
+        Kelly size = frac * bankroll (frac = fractional Kelly)
         """
         if side is None or mid_price <= 0 or mid_price >= 1:
+            logger.debug(f"[{asset}] KELLY: early exit side={side} mid={mid_price}")
             return 0.0, 0.0, 0.0, 0.0, False
 
         # Implied probability from market price
@@ -612,38 +621,45 @@ class EdgeFilter:
             implied_prob = mid_price
             price = mid_price  # cost to buy 1 YES share
         else:
-            # For NO: market price of NO = 1 - YES mid
             implied_prob = 1.0 - mid_price
             price = 1.0 - mid_price
 
-        # Our edge estimate: we assume our signals give us a probability boost.
-        # The boost is configurable per strategy (lag/squeeze/catalyst get higher boost).
-        estimated_prob = min(implied_prob + edge_boost, 0.95)
+        # Win probability: when OB strongly passes, use OB ratio as our estimate
+        if ob_signal and bid_ratio > 0.52 and side == Side.YES:
+            estimated_prob = min(bid_ratio, 0.95)
+            win_prob_source = f"OB bid_ratio={bid_ratio:.2%}"
+        elif ob_signal and ask_ratio > 0.52 and side == Side.NO:
+            estimated_prob = min(ask_ratio, 0.95)
+            win_prob_source = f"OB ask_ratio={ask_ratio:.2%}"
+        else:
+            estimated_prob = min(implied_prob + edge_boost, 0.95)
+            win_prob_source = f"implied+boost={implied_prob:.2%}+{edge_boost:.2%}"
 
-        # Kelly: f* = (p * (b+1) - 1) / b
-        # b = net odds = (1 - price) / price
-        b = (1.0 - price) / price
-        kelly_fraction = (estimated_prob * (b + 1) - 1) / b
-
-        if kelly_fraction <= 0:
-            return estimated_prob, implied_prob, 0.0, 0.0, False
-
+        # Edge = win_prob - implied_prob
         kelly_edge = estimated_prob - implied_prob
 
-        # Position sizing: kelly (full), fractional_kelly, or bankroll_pct
-        mode = getattr(self.config, "POSITION_SIZING_MODE", "fractional_kelly")
+        # Kelly: f* = (p * (b+1) - 1) / b
+        b = (1.0 - price) / price if price > 0 else 0
+        kelly_fraction_raw = (estimated_prob * (b + 1) - 1) / b if b > 0 else 0
+
         kelly_frac = getattr(self.config, "KELLY_FRACTION", 0.5)
+        mode = getattr(self.config, "POSITION_SIZING_MODE", "fractional_kelly")
+        if kelly_fraction_raw <= 0:
+            logger.info(
+                f"[{asset}] KELLY IN | win_prob={estimated_prob:.2%} (from {win_prob_source}) "
+                f"implied={implied_prob:.2%} edge={kelly_edge:.2%} b={b:.4f} -> frac<=0 NO BET"
+            )
+            return estimated_prob, implied_prob, kelly_edge, 0.0, False
+
         if mode == "kelly":
-            frac = kelly_fraction
+            frac = kelly_fraction_raw
         elif mode == "fractional_kelly":
-            frac = kelly_fraction * kelly_frac  # e.g. 0.5 = half-Kelly
+            frac = kelly_fraction_raw * kelly_frac
         else:
-            # bankroll_pct: dynamic % based on edge, capped
             base_pct = min(0.08, max(0.02, kelly_edge + 0.02))
             frac = base_pct
-        raw_size = frac * self.config.BANKROLL
 
-        # Clamp to configured limits (MAX_POSITION_SIZE_USD caps per-trade; allows many positions)
+        raw_size = frac * self.config.BANKROLL
         max_size = getattr(self.config, "MAX_POSITION_SIZE_USD", self.config.MAX_BET_SIZE)
         kelly_size = max(
             self.config.MIN_BET_SIZE,
@@ -651,7 +667,11 @@ class EdgeFilter:
         )
 
         signal_fired = kelly_edge >= self.config.MIN_KELLY_EDGE
-        # Note: no asset param in _check_kelly — caller logs summary
+        logger.info(
+            f"[{asset}] KELLY OUT | win_prob={estimated_prob:.2%} ({win_prob_source}) "
+            f"implied={implied_prob:.2%} edge={kelly_edge:.2%} size=${kelly_size:.2f} "
+            f"signal={'PASS' if signal_fired else 'FAIL'}"
+        )
         return estimated_prob, implied_prob, kelly_edge, kelly_size, signal_fired
 
     # ── Helpers ───────────────────────────────────────────────────────────────
