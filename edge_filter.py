@@ -92,14 +92,14 @@ class EdgeFilter:
         """
         asset = self._detect_asset(market.question)
 
-        # GATE: Order book / price history
-        if not market.order_book or not market.price_history:
-            n_bids = len(market.order_book.yes_bids) if market.order_book else 0
-            n_asks = len(market.order_book.yes_asks) if market.order_book else 0
-            n_ticks = len(market.price_history) if market.price_history else 0
-            logger.info(f"[{asset}] GATE BLOCK: Missing data | bids={n_bids} asks={n_asks} price_ticks={n_ticks} — SKIP")
+        # GATE: Order book required; price_history optional (CLOB often returns empty for 15-min markets)
+        if not market.order_book:
+            logger.info(f"[{asset}] GATE BLOCK: No order book — SKIP")
             return EdgeResult(has_edge=False, side=None, signal_count=0,
-                              reason="Missing order book or price history")
+                              reason="Missing order book")
+        if not market.price_history:
+            market.price_history = []  # Allow eval with OB+Kelly only; momentum/vol will fail
+            logger.info(f"[{asset}] ORDERBOOK: price_history empty — using OB+Kelly only (no momentum/vol)")
 
         mid = market.order_book.mid_price
         if mid is None:

@@ -140,7 +140,7 @@ class BotConfig:
     XRP_CATALYST_EXPIRY_MINUTES: int = 60       # Auto-expire catalyst flag after 60 minutes
     XRP_CATALYST_SET_TIME: Optional[str] = None # ISO timestamp when flag was set
     XRP_CATALYST_SIGNAL_BOOST: float = 0.18     # Maximum Kelly boost for catalyst trades
-    XRP_NO_CATALYST_MIN_SIGNALS: int = 4        # Require ALL 4 signals if no catalyst
+    XRP_NO_CATALYST_MIN_SIGNALS: int = int(os.getenv("XRP_MIN_SIGNALS", "2"))  # 2 signals when no catalyst
 
     # ── Daily/Weekly Reports ───────────────────────────────────────────────────────
     DAILY_REPORT_ENABLED: bool = os.getenv("DAILY_REPORT_ENABLED", "true").lower() in ("true", "1", "yes")
