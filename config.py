@@ -50,25 +50,25 @@ class BotConfig:
     # ── Edge Filter (core profit gate) ──────────────────────────────────────
     MIN_EDGE_SIGNALS: int = int(os.getenv("MIN_EDGE_SIGNALS", "2"))  # Require 2 of 4 signals (was 3)
                                        # Signals: OB imbalance, momentum, volume, Kelly
-    MIN_KELLY_EDGE: float = float(os.getenv("MIN_KELLY_EDGE", "0.03"))  # Minimum 3% Kelly edge (was 5%)
-    MIN_EDGE_PCT: float = float(os.getenv("MIN_EDGE_PCT", "0.03"))  # Configurable min edge (3%)
+    MIN_KELLY_EDGE: float = float(os.getenv("MIN_KELLY_EDGE", "0.02"))  # 2% Kelly edge (more trades)
+    MIN_EDGE_PCT: float = float(os.getenv("MIN_EDGE_PCT", "0.02"))  # 2% min edge
     MIN_LIQUIDITY_USDC: float = 500.0  # Market must have at least $500 in order book
     MIN_MARKET_VOLUME_USD: float = float(os.getenv("MIN_MARKET_VOLUME_USD", "500.0"))  # $500 min (was 1000)
     BASE_KELLY_BOOST: float = 0.08     # Default edge boost (calibrate via backtest); overridden per strategy
     MAX_SPREAD_CENTS: float = 0.08     # Max bid-ask spread (8¢) to avoid illiquid markets
 
     # ── Order Book Imbalance ─────────────────────────────────────────────────
-    OB_IMBALANCE_THRESHOLD: float = float(os.getenv("OB_IMBALANCE_THRESHOLD", "0.55"))  # 55% = signal (was 60%)
+    OB_IMBALANCE_THRESHOLD: float = float(os.getenv("OB_IMBALANCE_THRESHOLD", "0.52"))  # 52% = signal (more trades)
     OB_DEPTH_LEVELS: int = 5               # How many price levels to analyze
 
     # ── Momentum / Price Velocity ─────────────────────────────────────────────
-    MOMENTUM_WINDOW: int = int(os.getenv("MOMENTUM_WINDOW", "10"))  # Last N price ticks
-    MOMENTUM_MIN_MOVE: float = float(os.getenv("MOMENTUM_MIN_MOVE", "0.02"))  # ≥2% move (was 4%)
-    MOMENTUM_DIRECTION_CONSISTENCY: float = 0.70  # 70% of ticks must be in same direction
+    MOMENTUM_WINDOW: int = int(os.getenv("MOMENTUM_WINDOW", "5"))  # 5 ticks (15-min has sparse history)
+    MOMENTUM_MIN_MOVE: float = float(os.getenv("MOMENTUM_MIN_MOVE", "0.01"))  # 1% move (more trades)
+    MOMENTUM_DIRECTION_CONSISTENCY: float = float(os.getenv("MOMENTUM_CONSISTENCY", "0.60"))  # 60% ticks same direction
 
     # ── Volume Spike Detection ───────────────────────────────────────────────
-    VOLUME_SPIKE_MULTIPLIER: float = float(os.getenv("VOLUME_SPIKE_MULTIPLIER", "2.0"))  # 2x baseline (was 2.5)
-    VOLUME_ROLLING_WINDOW: int = 20        # N ticks for baseline volume average
+    VOLUME_SPIKE_MULTIPLIER: float = float(os.getenv("VOLUME_SPIKE_MULTIPLIER", "1.5"))  # 1.5x baseline (more trades)
+    VOLUME_ROLLING_WINDOW: int = int(os.getenv("VOLUME_ROLLING_WINDOW", "10"))  # 10 ticks (15-min markets sparse)
 
     # ── Execution ────────────────────────────────────────────────────────────
     ORDER_TYPE: str = "GTC"            # GTC = Good Till Cancelled, FOK = Fill Or Kill

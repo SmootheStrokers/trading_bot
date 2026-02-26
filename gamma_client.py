@@ -161,7 +161,7 @@ async def fetch_crypto_15min_markets(
                     continue
                 q = (m.get("question") or "").lower()
                 updown = any(k in q for k in ["above", "below", "up", "down", "higher", "lower", "exceed", "greater", "hit", ">$"])
-                crypto = any(a in q for a in ["bitcoin", "btc", "ethereum", "eth", "solana", "sol", "megaeth"])
+                crypto = any(a in q for a in ["bitcoin", "btc", "ethereum", "eth", "solana", "sol", "xrp", "ripple"])
                 if not (updown and crypto):
                     continue
                 end_str = m.get("endDate") or m.get("endDateIso")

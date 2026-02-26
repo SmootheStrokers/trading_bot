@@ -440,11 +440,21 @@ class EdgeFilter:
                     return False, None
 
         if yes_side == Side.YES:
-            logger.info(f"OB imbalance: BID-heavy {bid_ratio:.2%} → YES")
+            logger.info(f"OB imbalance: BID-heavy {bid_ratio:.2%} -> YES")
             return True, Side.YES
         elif yes_side == Side.NO:
-            logger.info(f"OB imbalance: ASK-heavy {ask_ratio:.2%} → NO")
+            logger.info(f"OB imbalance: ASK-heavy {ask_ratio:.2%} -> NO")
             return True, Side.NO
+
+        # Fallback: when book is balanced but mid is extreme (like trades.csv YES@0.185)
+        mid = ob.mid_price
+        if mid is not None:
+            if mid < 0.42:
+                logger.info(f"OB mid-extreme: mid={mid:.3f} -> YES (contrarian)")
+                return True, Side.YES
+            if mid > 0.58:
+                logger.info(f"OB mid-extreme: mid={mid:.3f} -> NO (contrarian)")
+                return True, Side.NO
 
         logger.debug(f"OB imbalance: no side >= {threshold} (bid={bid_ratio:.2%} ask={ask_ratio:.2%})")
         return False, None
