@@ -461,6 +461,115 @@ async def get_goal_tracking():
     }
 
 
+REPORTS_DIR = BASE_DIR / "reports"
+
+
+def list_reports(limit: int = 7) -> List[dict]:
+    """List last N daily reports (not weekly)."""
+    if not REPORTS_DIR.exists():
+        return []
+    reports = []
+    for f in sorted(REPORTS_DIR.glob("*.json"), reverse=True):
+        if f.stem.startswith("weekly-"):
+            continue
+        if len(reports) >= limit:
+            break
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            if data.get("report_type") == "daily":
+                reports.append({
+                    "date": data.get("date", f.stem),
+                    "summary": data.get("performance_summary", {}),
+                    "path": str(f),
+                })
+        except Exception:
+            pass
+    return reports
+
+
+@app.get("/api/reports")
+async def get_reports():
+    """List last 7 daily reports for dashboard."""
+    return {"reports": list_reports(7)}
+
+
+def _valid_report_date(date: str) -> bool:
+    """Ensure date is YYYY-MM-DD format to prevent path traversal."""
+    if not date or len(date) != 10:
+        return False
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+
+
+@app.get("/api/reports/{date}")
+async def get_report_by_date(date: str):
+    """Get full report for a specific date (YYYY-MM-DD)."""
+    if not _valid_report_date(date):
+        return {"error": "Invalid date format", "date": date}
+    path = REPORTS_DIR / f"{date}.json"
+    if not path.exists():
+        return {"error": "Report not found", "date": date}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/generate-report")
+async def generate_report(send_email: bool = False, send_discord: bool = False):
+    """
+    Manually trigger daily report generation.
+    Returns the generated report. Optionally send via email/discord.
+    """
+    try:
+        from daily_report import run_daily_report, generate_daily_report
+        report = run_daily_report(send_email_flag=send_email, send_discord_flag=send_discord)
+        return {"success": True, "report": report, "date": report.get("date")}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/reports/{date}/csv")
+async def download_report_csv(date: str):
+    """Download report as CSV."""
+    if not _valid_report_date(date):
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "Invalid date format"}, status_code=400)
+    path = REPORTS_DIR / f"{date}.json"
+    if not path.exists():
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "Report not found"}, status_code=404)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        import io
+        output = io.StringIO()
+        writer = csv.writer(output)
+        ps = data.get("performance_summary", {})
+        writer.writerow(["Metric", "Value"])
+        writer.writerow(["Date", data.get("date")])
+        writer.writerow(["Net P&L (USD)", ps.get("net_pnl_usd")])
+        writer.writerow(["Net P&L (%)", ps.get("net_pnl_pct")])
+        writer.writerow(["Trades", ps.get("total_trades")])
+        writer.writerow(["Win Rate", ps.get("win_rate")])
+        writer.writerow(["Starting Bankroll", ps.get("starting_bankroll")])
+        writer.writerow(["Ending Bankroll", ps.get("ending_bankroll")])
+        for name, val in data.get("crypto_performance", {}).get("by_strategy", {}).items():
+            writer.writerow([f"Strategy: {name}", val.get("pnl")])
+        from fastapi.responses import Response
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=report-{date}.csv"}
+        )
+    except Exception as e:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/api/pnl-series")
 async def get_pnl_series():
     trades = read_trades()
@@ -539,10 +648,43 @@ async def get_chart_data():
                 pass
     freq_by_hour = [{"hour": h, "count": by_hour.get(h, 0)} for h in range(24)]
 
+    # Exit reason distribution
+    by_reason = defaultdict(int)
+    for t in closed:
+        r = t.get("reason") or "OTHER"
+        by_reason[r] += 1
+    exit_reason_dist = [{"reason": k, "count": v} for k, v in sorted(by_reason.items(), key=lambda x: -x[1])]
+
+    # P&L histogram buckets ($ ranges)
+    bucket_edges = [-float("inf"), -25, -10, -5, 0, 5, 10, 25, float("inf")]
+    bucket_labels = ["<-$25", "$-25 to -10", "$-10 to -5", "$-5 to 0", "$0 to 5", "$5 to 10", "$10 to 25", ">$25"]
+    pnl_buckets = [0] * (len(bucket_edges) - 1)
+    for t in closed:
+        p = float(t.get("pnl_usdc", 0) or 0)
+        for i in range(len(bucket_edges) - 1):
+            if bucket_edges[i] <= p < bucket_edges[i + 1]:
+                pnl_buckets[i] += 1
+                break
+    pnl_histogram = [{"label": bucket_labels[i], "count": pnl_buckets[i]} for i in range(len(bucket_labels))]
+
+    # Daily trade count last 14 days
+    daily_count = defaultdict(int)
+    for i in range(14):
+        d = (datetime.utcnow() - timedelta(days=i)).date().isoformat()
+        daily_count[d] = 0
+    for t in closed:
+        et = (t.get("exit_time") or "")[:10]
+        if et in daily_count:
+            daily_count[et] += 1
+    daily_trades_14d = [{"date": d, "count": daily_count[d]} for d in sorted(daily_count.keys(), reverse=True)]
+
     return {
         "daily_pnl_7d": daily_bars,
         "win_loss_dist": win_loss_dist,
         "trades_by_hour": freq_by_hour,
+        "exit_reason_dist": exit_reason_dist,
+        "pnl_histogram": pnl_histogram,
+        "daily_trades_14d": daily_trades_14d,
     }
 
 

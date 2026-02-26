@@ -48,26 +48,26 @@ class BotConfig:
     KELLY_FRACTION: float = float(os.getenv("KELLY_FRACTION", "0.5"))  # 0.5 = half-Kelly (when fractional_kelly)
 
     # ── Edge Filter (core profit gate) ──────────────────────────────────────
-    MIN_EDGE_SIGNALS: int = 3          # Require 3 of 4 signals to fire before trading
+    MIN_EDGE_SIGNALS: int = int(os.getenv("MIN_EDGE_SIGNALS", "2"))  # Require 2 of 4 signals (was 3)
                                        # Signals: OB imbalance, momentum, volume, Kelly
-    MIN_KELLY_EDGE: float = 0.05       # Minimum 5% Kelly edge required (p > implied prob + 0.05)
-    MIN_EDGE_PCT: float = float(os.getenv("MIN_EDGE_PCT", "0.04"))  # Configurable min edge (e.g. 3-5%)
+    MIN_KELLY_EDGE: float = float(os.getenv("MIN_KELLY_EDGE", "0.03"))  # Minimum 3% Kelly edge (was 5%)
+    MIN_EDGE_PCT: float = float(os.getenv("MIN_EDGE_PCT", "0.03"))  # Configurable min edge (3%)
     MIN_LIQUIDITY_USDC: float = 500.0  # Market must have at least $500 in order book
-    MIN_MARKET_VOLUME_USD: float = float(os.getenv("MIN_MARKET_VOLUME_USD", "1000.0"))  # Prefer high-volume markets
+    MIN_MARKET_VOLUME_USD: float = float(os.getenv("MIN_MARKET_VOLUME_USD", "500.0"))  # $500 min (was 1000)
     BASE_KELLY_BOOST: float = 0.08     # Default edge boost (calibrate via backtest); overridden per strategy
     MAX_SPREAD_CENTS: float = 0.08     # Max bid-ask spread (8¢) to avoid illiquid markets
 
     # ── Order Book Imbalance ─────────────────────────────────────────────────
-    OB_IMBALANCE_THRESHOLD: float = 0.60   # 60% of depth on one side = signal
+    OB_IMBALANCE_THRESHOLD: float = float(os.getenv("OB_IMBALANCE_THRESHOLD", "0.55"))  # 55% = signal (was 60%)
     OB_DEPTH_LEVELS: int = 5               # How many price levels to analyze
 
     # ── Momentum / Price Velocity ─────────────────────────────────────────────
-    MOMENTUM_WINDOW: int = 10          # Last N price ticks to measure momentum
-    MOMENTUM_MIN_MOVE: float = 0.04    # Price must have moved ≥4% in window
+    MOMENTUM_WINDOW: int = int(os.getenv("MOMENTUM_WINDOW", "10"))  # Last N price ticks
+    MOMENTUM_MIN_MOVE: float = float(os.getenv("MOMENTUM_MIN_MOVE", "0.02"))  # ≥2% move (was 4%)
     MOMENTUM_DIRECTION_CONSISTENCY: float = 0.70  # 70% of ticks must be in same direction
 
     # ── Volume Spike Detection ───────────────────────────────────────────────
-    VOLUME_SPIKE_MULTIPLIER: float = 2.5   # Current volume must be 2.5x the rolling avg
+    VOLUME_SPIKE_MULTIPLIER: float = float(os.getenv("VOLUME_SPIKE_MULTIPLIER", "2.0"))  # 2x baseline (was 2.5)
     VOLUME_ROLLING_WINDOW: int = 20        # N ticks for baseline volume average
 
     # ── Execution ────────────────────────────────────────────────────────────
@@ -110,7 +110,7 @@ class BotConfig:
     BTC_MOMENTUM_WINDOW_MINUTES: int = 5       # Window open price lookback
     ACTIVE_HOURS_START: int = 9                # 9 AM ET
     ACTIVE_HOURS_END: int = 16                 # 4 PM ET
-    ACTIVE_HOURS_ENABLED: bool = True         # Enforce US/EU hours gate
+    ACTIVE_HOURS_ENABLED: bool = os.getenv("ACTIVE_HOURS_ENABLED", "false").lower() in ("true", "1", "yes")
 
     # ── Strategy 2: ETH Lag Trade ─────────────────────────────────────────────────
     ETH_LAG_EXPIRY_SECONDS: int = 90          # How long BTC signal stays valid for ETH entry
@@ -134,9 +134,19 @@ class BotConfig:
     MAKER_VOLATILITY_KILL: float = 0.008        # Cancel maker orders if price moves 0.8% suddenly
 
     # ── Strategy 5: XRP Catalyst ──────────────────────────────────────────────────
+    XRP_REQUIRE_CATALYST: bool = os.getenv("XRP_REQUIRE_CATALYST", "false").lower() in ("true", "1", "yes")
     XRP_CATALYST_ACTIVE: bool = False
     XRP_CATALYST_DIRECTION: str = "UP"          # "UP" or "DOWN"
     XRP_CATALYST_EXPIRY_MINUTES: int = 60       # Auto-expire catalyst flag after 60 minutes
     XRP_CATALYST_SET_TIME: Optional[str] = None # ISO timestamp when flag was set
     XRP_CATALYST_SIGNAL_BOOST: float = 0.18     # Maximum Kelly boost for catalyst trades
     XRP_NO_CATALYST_MIN_SIGNALS: int = 4        # Require ALL 4 signals if no catalyst
+
+    # ── Daily/Weekly Reports ───────────────────────────────────────────────────────
+    DAILY_REPORT_ENABLED: bool = os.getenv("DAILY_REPORT_ENABLED", "true").lower() in ("true", "1", "yes")
+    REPORT_EMAIL_TO: str = os.getenv("REPORT_EMAIL_TO", "")
+    REPORT_EMAIL_FROM: str = os.getenv("REPORT_EMAIL_FROM", "")
+    REPORT_EMAIL_PASSWORD: str = os.getenv("REPORT_EMAIL_PASSWORD", "")
+    REPORT_SEND_TIME_UTC: str = os.getenv("REPORT_SEND_TIME_UTC", "23:59")  # HH:MM
+    DISCORD_WEBHOOK_URL: str = os.getenv("DISCORD_WEBHOOK_URL", "")
+    WEEKLY_REPORT_DAY: str = os.getenv("WEEKLY_REPORT_DAY", "sunday").lower()

@@ -56,14 +56,14 @@ class OrderExecutor:
 
         if self.config.PAPER_TRADING or getattr(self.config, "DRY_RUN", False):
             order_id = f"paper-{int(time.time() * 1000)}"
-            logger.info(f"PAPER/DRY_RUN: Simulated order ✓ | ID: {order_id} (no real order placed)")
+            logger.info(f"PAPER/DRY_RUN: Simulated order OK | ID: {order_id} (no real order placed)")
             return order_id
 
         try:
             resp = await self.client.create_order(order_payload)
             order_id = resp.get("orderID") or resp.get("id")
             if order_id:
-                logger.info(f"Order placed ✓ | ID: {order_id}")
+                logger.info(f"Order placed OK | ID: {order_id}")
                 return order_id
             else:
                 logger.error(f"Order response missing ID: {resp}")
@@ -148,12 +148,12 @@ class OrderExecutor:
         )
         if self.config.PAPER_TRADING:
             order_id = f"paper-exit-{int(time.time() * 1000)}"
-            logger.info(f"PAPER TRADING: Simulated {label} order | ID: {order_id} | price≥{min_price:.4f}")
+            logger.info(f"PAPER TRADING: Simulated {label} order | ID: {order_id} | price>={min_price:.4f}")
             return order_id
         try:
             resp = await self.client.create_order(order_payload)
             order_id = resp.get("orderID") or resp.get("id")
-            logger.info(f"{label} order placed | ID: {order_id} | price≥{min_price:.4f}")
+            logger.info(f"{label} order placed | ID: {order_id} | price>={min_price:.4f}")
             return order_id
         except Exception as e:
             logger.error(f"{label} order failed: {e}", exc_info=True)

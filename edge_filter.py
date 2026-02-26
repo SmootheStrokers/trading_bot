@@ -142,8 +142,8 @@ class EdgeFilter:
 
         if asset == "XRP":
             xrp_catalyst_signal, xrp_catalyst_side = self._check_xrp_catalyst()
-            # XRP: no edge without catalyst
-            if not self.config.XRP_CATALYST_ACTIVE and not xrp_catalyst_signal:
+            # XRP: require catalyst only when XRP_REQUIRE_CATALYST=true
+            if getattr(self.config, "XRP_REQUIRE_CATALYST", True) and not self.config.XRP_CATALYST_ACTIVE and not xrp_catalyst_signal:
                 return EdgeResult(
                     has_edge=False, side=None, signal_count=0,
                     reason="XRP — no catalyst active, no trade",
@@ -155,6 +155,13 @@ class EdgeFilter:
         )
         mom_signal, mom_side = self._check_momentum(market)
         vol_signal = self._check_volume_spike(market)
+
+        # Debug: log signal state for each market (INFO so bot.log shows it)
+        sig_summary = (
+            f"OB={ob_signal}({ob_side}) MOM={mom_signal}({mom_side}) VOL={vol_signal} | "
+            f"btc_mom={btc_mom_signal} eth_lag={eth_lag_signal} sol_sqz={sol_squeeze_signal} xrp_cat={xrp_catalyst_signal}"
+        )
+        logger.info(f"[{asset}] {market.question[:45]} | {sig_summary}")
 
         # Resolve directional side: base + strategy-specific
         consensus_side = self._resolve_directional_side(
@@ -433,12 +440,13 @@ class EdgeFilter:
                     return False, None
 
         if yes_side == Side.YES:
-            logger.debug(f"OB imbalance: BID-heavy {bid_ratio:.2%} → YES")
+            logger.info(f"OB imbalance: BID-heavy {bid_ratio:.2%} → YES")
             return True, Side.YES
         elif yes_side == Side.NO:
-            logger.debug(f"OB imbalance: ASK-heavy {ask_ratio:.2%} → NO")
+            logger.info(f"OB imbalance: ASK-heavy {ask_ratio:.2%} → NO")
             return True, Side.NO
 
+        logger.debug(f"OB imbalance: no side >= {threshold} (bid={bid_ratio:.2%} ask={ask_ratio:.2%})")
         return False, None
 
     # ── Signal 2: Momentum / Price Velocity ───────────────────────────────────
@@ -474,11 +482,15 @@ class EdgeFilter:
 
         if abs(total_move) >= min_move and consistency >= min_consistency:
             side = Side.YES if total_move > 0 else Side.NO
-            logger.debug(
+            logger.info(
                 f"Momentum signal: move={total_move:.2%} consistency={consistency:.2%} → {side}"
             )
             return True, side
 
+        logger.debug(
+            f"Momentum: move={total_move:.2%} cons={consistency:.2%} "
+            f"(need |move|>={min_move} cons>={min_consistency})"
+        )
         return False, None
 
     # ── Signal 3: Volume Spike ────────────────────────────────────────────────
@@ -493,12 +505,14 @@ class EdgeFilter:
         window = self.config.VOLUME_ROLLING_WINDOW
 
         if len(history) < window + 1:
+            logger.debug(f"Volume: need {window+1} ticks, have {len(history)}")
             return False
 
         baseline_vols = [t.volume for t in history[-(window+1):-1]]
         recent_vol = history[-1].volume
 
         if not baseline_vols or all(v == 0 for v in baseline_vols):
+            logger.debug(f"Volume: baseline all zero (recent={recent_vol})")
             return False
 
         avg_vol = statistics.mean(baseline_vols)
@@ -509,7 +523,9 @@ class EdgeFilter:
         fires = ratio >= self.config.VOLUME_SPIKE_MULTIPLIER
 
         if fires:
-            logger.debug(f"Volume spike: {ratio:.1f}x baseline")
+            logger.info(f"Volume spike: {ratio:.1f}x baseline (recent={recent_vol:.0f} avg={avg_vol:.0f})")
+        else:
+            logger.debug(f"Volume: ratio {ratio:.2f} < {self.config.VOLUME_SPIKE_MULTIPLIER}")
 
         return fires
 

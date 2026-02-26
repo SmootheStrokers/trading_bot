@@ -18,6 +18,9 @@ trades.csv
 bot_state.json
 session_start.json
 
+# Reports (keep locally, don't commit)
+reports/
+
 # IDE
 .idea/
 .vscode/

@@ -6,6 +6,7 @@ Core philosophy: profit edge or no trade.
 import asyncio
 import json
 import logging
+import os
 import signal
 import sys
 from datetime import datetime, timezone
@@ -25,6 +26,7 @@ from state_writer import write_state
 from logger import setup_logger
 from binance_feed import BinanceFeed
 from strategy_router import StrategyRouter
+from models import EdgeResult, Side
 
 # Configure logging early — use config.LOG_FILE so dashboard reads same file as terminal
 config = BotConfig()
@@ -86,6 +88,10 @@ class PolymarketBot:
         await self.clob.start()
         await self.binance_feed.start()
 
+        # One-time force test trade (FORCE_TEST_TRADE=true) to verify full pipeline
+        if os.getenv("FORCE_TEST_TRADE", "false").lower() in ("true", "1", "yes"):
+            await self._force_test_trade_once()
+
         if sys.platform != "win32":
             loop = asyncio.get_event_loop()
             for sig in (signal.SIGINT, signal.SIGTERM):
@@ -97,6 +103,7 @@ class PolymarketBot:
                 self.maker_loop(),
                 self.position_manager.monitor_loop(),
                 self.catalyst_watcher(),
+                self.report_scheduler_loop(),
             )
         finally:
             await self._cleanup()
@@ -106,6 +113,44 @@ class PolymarketBot:
         await self.position_manager.close_all_async()
         await self.binance_feed.stop()
         await self.clob.close()
+
+    async def report_scheduler_loop(self):
+        """Run daily report at 11:59 PM UTC (or REPORT_SEND_TIME_UTC). Weekly report on Sundays."""
+        if not getattr(self.config, "DAILY_REPORT_ENABLED", True):
+            return
+        send_time = getattr(self.config, "REPORT_SEND_TIME_UTC", "23:59") or "23:59"
+        try:
+            parts = send_time.replace(":", " ").split()
+            h = int(parts[0]) if parts else 23
+            m = int(parts[1]) if len(parts) > 1 else 59
+        except Exception:
+            h, m = 23, 59
+        weekly_day = getattr(self.config, "WEEKLY_REPORT_DAY", "sunday").lower()
+        weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        weekly_weekday = weekdays.index(weekly_day) if weekly_day in weekdays else 6  # Sunday=6
+
+        while self.running:
+            try:
+                now = datetime.now(timezone.utc)
+                # Check if we're within the report minute (23:59)
+                if now.hour == h and now.minute == m:
+                    logger.info("Running scheduled daily report...")
+                    try:
+                        from daily_report import run_daily_report, run_weekly_report
+                        run_daily_report(send_email_flag=True, send_discord_flag=True)
+                        if now.weekday() == weekly_weekday:
+                            run_weekly_report()
+                            logger.info("Weekly report generated")
+                    except Exception as e:
+                        logger.error(f"Report generation failed: {e}", exc_info=True)
+                    await asyncio.sleep(61)  # Avoid running twice in same minute
+                else:
+                    await asyncio.sleep(30)  # Check every 30 seconds
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Report scheduler error: {e}", exc_info=True)
+                await asyncio.sleep(60)
 
     async def catalyst_watcher(self):
         """Read catalyst_flag.json every 30s and update config."""
@@ -282,10 +327,10 @@ class PolymarketBot:
                                 f"Kelly size: ${edge_result.kelly_size:.2f}"
                             )
                             order_id = await self.executor.place_order(market, edge_result)
-                                if order_id:
-                                    self.position_manager.add_position(market, edge_result)
-                                    self.risk_manager.record_trade_open()
-                                    actually_entered = True
+                            if order_id:
+                                self.position_manager.add_position(market, edge_result)
+                                self.risk_manager.record_trade_open()
+                                actually_entered = True
                             else:
                                 logger.warning("Order failed — position not added")
                     if edge_result.has_edge:
@@ -324,6 +369,50 @@ class PolymarketBot:
                 daily_pnl=risk_state.get("daily_pnl"),
             )
             await asyncio.sleep(self.config.SCAN_INTERVAL_SECONDS)
+
+    async def _force_test_trade_once(self):
+        """Force a single paper trade to verify full pipeline: scan → edge → order → position → trades.csv."""
+        logger.info("=" * 60)
+        logger.info("  FORCE TEST TRADE — placing 1 paper trade on highest-volume market")
+        logger.info("=" * 60)
+        try:
+            markets = await self.scanner.fetch_active_15min_markets()
+            if not markets:
+                logger.warning("Force test: no markets found — cannot place test trade")
+                return
+            # Pick highest volume/liquidity market
+            market = max(markets, key=lambda m: (m.total_depth_usdc or 0, m.recent_volume_usd or 0))
+            mid = market.order_book.mid_price if market.order_book else 0.5
+            if mid is None or mid <= 0:
+                mid = 0.50
+            side = Side.YES if mid <= 0.55 else Side.NO
+            size = min(10.0, self.config.MAX_BET_SIZE)
+            edge = EdgeResult(
+                has_edge=True,
+                side=side,
+                signal_count=2,
+                ob_imbalance_signal=True,
+                kelly_signal=True,
+                strategy_name="FORCE_TEST",
+                asset=self._asset(market.question),
+                kelly_edge=0.05,
+                kelly_size=size,
+                entry_price=mid,
+                reason="Force test trade — pipeline verification",
+            )
+            if self.position_manager.has_position(market.condition_id):
+                logger.warning("Force test: already have position in market — skipping")
+                return
+            order_id = await self.executor.place_order(market, edge)
+            if order_id:
+                self.position_manager.add_position(market, edge)
+                self.risk_manager.record_trade_open()
+                logger.info(f"*** FORCE TEST TRADE PLACED *** {market.question[:50]} | {side.value} ${size} | ID={order_id}")
+                logger.info("  -> Check trades.csv and dashboard to confirm pipeline works")
+            else:
+                logger.error("Force test: order placement failed")
+        except Exception as e:
+            logger.error(f"Force test trade failed: {e}", exc_info=True)
 
     def _asset(self, question: str) -> str:
         q = (question or "").lower()
