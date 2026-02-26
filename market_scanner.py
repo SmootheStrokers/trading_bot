@@ -164,25 +164,30 @@ class MarketScanner:
                         market.order_book.total_bid_depth +
                         market.order_book.total_ask_depth
                     )
+                    n_bids = len(market.order_book.yes_bids)
+                    n_asks = len(market.order_book.yes_asks)
                     if total_depth < self.config.MIN_LIQUIDITY_USDC:
-                        logger.debug(f"Skipping thin market: {market.question[:40]} (${total_depth:.0f})")
+                        logger.info(f"SCANNER: thin market SKIP — {market.question[:40]} depth=${total_depth:.0f} (min ${self.config.MIN_LIQUIDITY_USDC}) bids={n_bids} asks={n_asks}")
                         return None
                     max_spread = getattr(self.config, "MAX_SPREAD_CENTS", 0.10)
                     best_bid = market.order_book.best_yes_bid or 0
                     best_ask = market.order_book.best_yes_ask or 1
                     spread = best_ask - best_bid if best_ask > best_bid else 0
                     if spread > max_spread:
-                        logger.debug(
-                            f"Skipping wide spread: {market.question[:40]} ({spread:.2%} > {max_spread:.2%})"
+                        logger.info(
+                            f"SCANNER: wide spread SKIP — {market.question[:40]} spread={spread:.2%} > {max_spread:.2%}"
                         )
                         return None
+                    logger.info(f"SCANNER: enriched {market.question[:40]} depth=${total_depth:.0f} bids={n_bids} asks={n_asks} ticks={len(market.price_history) if market.price_history else 0}")
 
                 try:
                     # CLOB prices-history expects market (condition_id), not token_id
                     hist_raw = await self.client.get_price_history(market.condition_id)
                     market.price_history = self._parse_price_history(hist_raw)
+                    if not market.price_history:
+                        logger.info(f"SCANNER: empty price_history for {market.question[:35]} — momentum/vol signals will fail")
                 except Exception as hist_err:
-                    logger.debug(f"Price history unavailable for {market.condition_id[:16]}: {hist_err}")
+                    logger.info(f"SCANNER: price_history error for {market.condition_id[:16]}: {hist_err} — momentum/vol will fail")
                     market.price_history = []  # Continue without momentum/volume signals
 
                 return market

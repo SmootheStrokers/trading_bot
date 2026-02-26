@@ -90,21 +90,39 @@ class EdgeFilter:
         Only sets has_edge=True if minimum signals fire + Kelly confirms.
         Supports strategy-specific context via optional params.
         """
+        asset = self._detect_asset(market.question)
+
+        # GATE: Order book / price history
         if not market.order_book or not market.price_history:
+            n_bids = len(market.order_book.yes_bids) if market.order_book else 0
+            n_asks = len(market.order_book.yes_asks) if market.order_book else 0
+            n_ticks = len(market.price_history) if market.price_history else 0
+            logger.info(f"[{asset}] GATE BLOCK: Missing data | bids={n_bids} asks={n_asks} price_ticks={n_ticks} — SKIP")
             return EdgeResult(has_edge=False, side=None, signal_count=0,
                               reason="Missing order book or price history")
 
         mid = market.order_book.mid_price
         if mid is None:
+            logger.info(f"[{asset}] GATE BLOCK: No mid price — SKIP")
             return EdgeResult(has_edge=False, side=None, signal_count=0,
                               reason="No mid price available")
 
-        asset = self._detect_asset(market.question)
+        # Log orderbook summary for every market
+        bid_depth = sum(l.price * l.size for l in market.order_book.yes_bids[:5])
+        ask_depth = sum(l.price * l.size for l in market.order_book.yes_asks[:5])
+        total_ob = bid_depth + ask_depth
+        n_bids = len(market.order_book.yes_bids)
+        n_asks = len(market.order_book.yes_asks)
+        if n_bids < 3 or n_asks < 3:
+            logger.info(f"[{asset}] ORDERBOOK: Thin book | bids={n_bids} asks={n_asks} depth=${total_ob:.0f} — may block signals")
+        else:
+            logger.info(f"[{asset}] ORDERBOOK: bids={n_bids} asks={n_asks} depth=${total_ob:.0f} mid={mid:.3f}")
         market.asset = asset
 
         # Active hours gate: skip directional strategies 1, 2, 3 outside 9AM-4PM ET
         if self.config.ACTIVE_HOURS_ENABLED and not self._is_within_active_hours():
             if asset in ("BTC", "ETH", "SOL"):
+                logger.info(f"[{asset}] GATE BLOCK: Outside active hours (9AM-4PM ET) — SKIP")
                 return EdgeResult(
                     has_edge=False, side=None, signal_count=0,
                     reason="Outside active hours (9AM-4PM ET) — directional strategies disabled",
@@ -144,6 +162,7 @@ class EdgeFilter:
             xrp_catalyst_signal, xrp_catalyst_side = self._check_xrp_catalyst()
             # XRP: require catalyst only when XRP_REQUIRE_CATALYST=true
             if getattr(self.config, "XRP_REQUIRE_CATALYST", True) and not self.config.XRP_CATALYST_ACTIVE and not xrp_catalyst_signal:
+                logger.info(f"[{asset}] GATE BLOCK: XRP no catalyst active — SKIP")
                 return EdgeResult(
                     has_edge=False, side=None, signal_count=0,
                     reason="XRP — no catalyst active, no trade",
@@ -151,17 +170,10 @@ class EdgeFilter:
 
         # ── Base signals 1–4 ──────────────────────────────────────────────────
         ob_signal, ob_side = self._check_order_book_imbalance(
-            market.order_book, market.no_order_book
+            market.order_book, market.no_order_book, asset=asset
         )
-        mom_signal, mom_side = self._check_momentum(market)
-        vol_signal = self._check_volume_spike(market)
-
-        # Debug: log signal state for each market (INFO so bot.log shows it)
-        sig_summary = (
-            f"OB={ob_signal}({ob_side}) MOM={mom_signal}({mom_side}) VOL={vol_signal} | "
-            f"btc_mom={btc_mom_signal} eth_lag={eth_lag_signal} sol_sqz={sol_squeeze_signal} xrp_cat={xrp_catalyst_signal}"
-        )
-        logger.info(f"[{asset}] {market.question[:45]} | {sig_summary}")
+        mom_signal, mom_side = self._check_momentum(market, asset=asset)
+        vol_signal, vol_ratio = self._check_volume_spike(market, asset=asset)
 
         # Resolve directional side: base + strategy-specific
         consensus_side = self._resolve_directional_side(
@@ -216,6 +228,17 @@ class EdgeFilter:
             self.config.MIN_KELLY_EDGE,
             getattr(self.config, "MIN_EDGE_PCT", 0.03),
         )
+
+        # SIGNAL SUMMARY — logged for every market every scan (INFO = always in bot.log)
+        ob_str = "PASS" if ob_signal else "FAIL"
+        mom_str = "PASS" if mom_signal else "FAIL"
+        vol_str = f"PASS ({vol_ratio:.2f}x)" if vol_signal else f"FAIL ({vol_ratio:.2f}x < {self.config.VOLUME_SPIKE_MULTIPLIER})"
+        kelly_str = f"PASS ({kelly_edge:.2%})" if kelly_signal else f"FAIL ({kelly_edge:.2%} < {min_edge:.2%})"
+        logger.info(
+            f"[{asset}] SIGNALS | OB:{ob_str} MOM:{mom_str} VOL:{vol_str} KELLY:{kelly_str} | "
+            f"side={consensus_side} dir_ok={directions_agree} size=${kelly_size:.2f} need={min_signals}"
+        )
+
         has_edge = (
             effective_count >= min_signals
             and kelly_edge >= min_edge
@@ -223,6 +246,23 @@ class EdgeFilter:
             and consensus_side is not None
             and kelly_size >= self.config.MIN_BET_SIZE
         )
+
+        # Final decision log
+        if has_edge:
+            logger.info(f"[{asset}] EDGE DECISION: TRADE | signals={effective_count}/{min_signals} edge={kelly_edge:.2%}")
+        else:
+            fail_reasons = []
+            if effective_count < min_signals:
+                fail_reasons.append(f"signals {effective_count}<{min_signals}")
+            if kelly_edge < min_edge:
+                fail_reasons.append(f"kelly {kelly_edge:.2%}<{min_edge:.2%}")
+            if not directions_agree:
+                fail_reasons.append("dir_mismatch")
+            if consensus_side is None:
+                fail_reasons.append("no_side")
+            if kelly_size < self.config.MIN_BET_SIZE:
+                fail_reasons.append(f"size ${kelly_size:.2f}<${self.config.MIN_BET_SIZE}")
+            logger.info(f"[{asset}] EDGE DECISION: NO TRADE | {', '.join(fail_reasons)}")
 
         strategy_name = ""
         if btc_mom_signal:
@@ -393,7 +433,7 @@ class EdgeFilter:
     # ── Signal 1: Order Book Imbalance ────────────────────────────────────────
 
     def _check_order_book_imbalance(
-        self, ob: OrderBook, no_ob: Optional[OrderBook] = None
+        self, ob: OrderBook, no_ob: Optional[OrderBook] = None, asset: str = ""
     ) -> Tuple[bool, Optional[Side]]:
         """
         Compare bid depth vs ask depth across top N levels.
@@ -411,6 +451,7 @@ class EdgeFilter:
         )
         total = bid_depth + ask_depth
         if total == 0:
+            logger.info(f"[{asset}] OB: bid_ratio=N/A ask_ratio=N/A (total=0) — FAIL")
             return False, None
 
         bid_ratio = bid_depth / total
@@ -436,38 +477,42 @@ class EdgeFilter:
                 elif no_ask_ratio >= threshold:
                     no_side = Side.YES
                 if no_side is not None and no_side != yes_side:
-                    logger.debug("OB imbalance: YES/NO sides disagree — no signal")
+                    logger.info(f"[{asset}] OB: YES/NO sides disagree — FAIL")
                     return False, None
 
         if yes_side == Side.YES:
-            logger.info(f"OB imbalance: BID-heavy {bid_ratio:.2%} -> YES")
+            logger.info(f"[{asset}] OB: bid_ratio={bid_ratio:.2%} (thresh {threshold}) — PASS -> YES")
             return True, Side.YES
         elif yes_side == Side.NO:
-            logger.info(f"OB imbalance: ASK-heavy {ask_ratio:.2%} -> NO")
+            logger.info(f"[{asset}] OB: ask_ratio={ask_ratio:.2%} (thresh {threshold}) — PASS -> NO")
             return True, Side.NO
 
         # Fallback: when book is balanced but mid is extreme (like trades.csv YES@0.185)
         mid = ob.mid_price
         if mid is not None:
             if mid < 0.42:
-                logger.info(f"OB mid-extreme: mid={mid:.3f} -> YES (contrarian)")
+                logger.info(f"[{asset}] OB: mid={mid:.3f} (<0.42) — PASS mid-extreme -> YES")
                 return True, Side.YES
             if mid > 0.58:
-                logger.info(f"OB mid-extreme: mid={mid:.3f} -> NO (contrarian)")
+                logger.info(f"[{asset}] OB: mid={mid:.3f} (>0.58) — PASS mid-extreme -> NO")
                 return True, Side.NO
 
-        logger.debug(f"OB imbalance: no side >= {threshold} (bid={bid_ratio:.2%} ask={ask_ratio:.2%})")
+        logger.info(f"[{asset}] OB: bid_ratio={bid_ratio:.2%} ask_ratio={ask_ratio:.2%} (thresh {threshold}) — FAIL")
         return False, None
 
     # ── Signal 2: Momentum / Price Velocity ───────────────────────────────────
 
-    def _check_momentum(self, market: Market) -> Tuple[bool, Optional[Side]]:
+    def _check_momentum(self, market: Market, asset: str = "") -> Tuple[bool, Optional[Side]]:
         """
         Look at the last N price ticks.
         Signal fires if price has moved MIN_MOVE% in a consistent direction.
         """
         history = market.price_history
+        min_move = self.config.MOMENTUM_MIN_MOVE
+        min_consistency = self.config.MOMENTUM_DIRECTION_CONSISTENCY
+
         if len(history) < self.config.MOMENTUM_WINDOW + 1:
+            logger.info(f"[{asset}] MOM: need {self.config.MOMENTUM_WINDOW+1} ticks, have {len(history)} — FAIL")
             return False, None
 
         window = history[-self.config.MOMENTUM_WINDOW:]
@@ -480,64 +525,57 @@ class EdgeFilter:
         # Check directional consistency (% of ticks moving in same direction)
         tick_deltas = [prices[i+1] - prices[i] for i in range(len(prices)-1)]
         if not tick_deltas:
+            logger.info(f"[{asset}] MOM: move={total_move:.2%} (no deltas) — FAIL")
             return False, None
 
         up_ticks = sum(1 for d in tick_deltas if d > 0)
         down_ticks = sum(1 for d in tick_deltas if d < 0)
-        total_ticks = len(tick_deltas)
-        consistency = max(up_ticks, down_ticks) / total_ticks
-
-        min_move = self.config.MOMENTUM_MIN_MOVE
-        min_consistency = self.config.MOMENTUM_DIRECTION_CONSISTENCY
+        consistency = max(up_ticks, down_ticks) / len(tick_deltas)
 
         if abs(total_move) >= min_move and consistency >= min_consistency:
             side = Side.YES if total_move > 0 else Side.NO
-            logger.info(
-                f"Momentum signal: move={total_move:.2%} consistency={consistency:.2%} → {side}"
-            )
+            logger.info(f"[{asset}] MOM: move={total_move:.2%} (min {min_move:.2%}) cons={consistency:.2%} — PASS -> {side}")
             return True, side
 
-        logger.debug(
-            f"Momentum: move={total_move:.2%} cons={consistency:.2%} "
-            f"(need |move|>={min_move} cons>={min_consistency})"
-        )
+        logger.info(f"[{asset}] MOM: move={total_move:.2%} (min {min_move:.2%}) cons={consistency:.2%} (min {min_consistency:.2%}) — FAIL")
         return False, None
 
     # ── Signal 3: Volume Spike ────────────────────────────────────────────────
 
-    def _check_volume_spike(self, market: Market) -> bool:
+    def _check_volume_spike(self, market: Market, asset: str = "") -> Tuple[bool, float]:
         """
         Compare recent volume to rolling baseline.
         A spike = VOLUME_SPIKE_MULTIPLIER × rolling average.
-        Volume spikes indicate smart money entering → edge confirmation.
+        Returns (signal_fired, ratio).
         """
         history = market.price_history
         window = self.config.VOLUME_ROLLING_WINDOW
+        ratio = 0.0
 
         if len(history) < window + 1:
-            logger.debug(f"Volume: need {window+1} ticks, have {len(history)}")
-            return False
+            logger.info(f"[{asset}] VOL: need {window+1} ticks, have {len(history)} — FAIL (ratio=N/A)")
+            return False, 0.0
 
         baseline_vols = [t.volume for t in history[-(window+1):-1]]
         recent_vol = history[-1].volume
 
         if not baseline_vols or all(v == 0 for v in baseline_vols):
-            logger.debug(f"Volume: baseline all zero (recent={recent_vol})")
-            return False
+            logger.info(f"[{asset}] VOL: baseline all zero (recent={recent_vol:.0f}) — FAIL")
+            return False, 0.0
 
         avg_vol = statistics.mean(baseline_vols)
         if avg_vol == 0:
-            return False
+            return False, 0.0
 
         ratio = recent_vol / avg_vol
         fires = ratio >= self.config.VOLUME_SPIKE_MULTIPLIER
 
         if fires:
-            logger.info(f"Volume spike: {ratio:.1f}x baseline (recent={recent_vol:.0f} avg={avg_vol:.0f})")
+            logger.info(f"[{asset}] VOL: ratio={ratio:.2f}x (min {self.config.VOLUME_SPIKE_MULTIPLIER}) — PASS")
         else:
-            logger.debug(f"Volume: ratio {ratio:.2f} < {self.config.VOLUME_SPIKE_MULTIPLIER}")
+            logger.info(f"[{asset}] VOL: ratio={ratio:.2f}x (min {self.config.VOLUME_SPIKE_MULTIPLIER}) — FAIL")
 
-        return fires
+        return fires, ratio
 
     # ── Signal 4: Kelly Criterion ─────────────────────────────────────────────
 
@@ -610,13 +648,7 @@ class EdgeFilter:
         )
 
         signal_fired = kelly_edge >= self.config.MIN_KELLY_EDGE
-
-        logger.debug(
-            f"Kelly: implied={implied_prob:.3f} est={estimated_prob:.3f} "
-            f"edge={kelly_edge:.3f} f*={kelly_fraction:.3f} "
-            f"size=${kelly_size:.2f}"
-        )
-
+        # Note: no asset param in _check_kelly — caller logs summary
         return estimated_prob, implied_prob, kelly_edge, kelly_size, signal_fired
 
     # ── Helpers ───────────────────────────────────────────────────────────────

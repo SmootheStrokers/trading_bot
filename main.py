@@ -258,9 +258,10 @@ class PolymarketBot:
                     can_trade = True  # Reset per market; risk checks may set False
                     asset = self._asset(market.question)
                     if self.position_manager.has_position(market.condition_id):
+                        logger.info(f"[{asset}] GATE: has_position — SKIP {market.question[:40]}")
                         continue
                     if self.position_manager.at_capacity():
-                        logger.debug("At max capacity — skipping new entries")
+                        logger.info(f"[{asset}] GATE: at_capacity (max {self.config.MAX_POSITIONS}) — SKIP")
                         break
 
                     edge_result = await self.strategy_router.route(
@@ -295,11 +296,12 @@ class PolymarketBot:
                                 can_trade = False
                                 logger.warning(f"Loss streak {loss_streak} — requiring +{extra_edge:.0%} extra edge, skipping")
                         if not can_trade and risk_reason:
-                            logger.warning(f"Risk blocked: {risk_reason}")
+                            logger.info(f"[{asset}] GATE: risk_blocked — {risk_reason}")
                         else:
                             edge_result.kelly_size = capped_size
                             if edge_result.kelly_size < self.config.MIN_BET_SIZE:
                                 can_trade = False
+                                logger.info(f"[{asset}] GATE: kelly_size ${edge_result.kelly_size:.2f} < MIN ${self.config.MIN_BET_SIZE} — SKIP")
 
                     if asset == "BTC" and edge_result.has_edge:
                         pct = self.binance_feed.get_pct_move_from_window_open("BTC")
@@ -315,8 +317,8 @@ class PolymarketBot:
                     actually_entered = False
                     if edge_result.has_edge and can_trade:
                         if self.position_manager.would_exceed_portfolio_risk(edge_result.kelly_size):
-                            logger.debug(
-                                f"Portfolio risk cap — would exceed {self.config.MAX_PORTFOLIO_RISK:.0%} "
+                            logger.info(
+                                f"[{asset}] GATE: portfolio_risk — would exceed {self.config.MAX_PORTFOLIO_RISK:.0%} "
                                 f"(current: ${self.position_manager.total_open_exposure_usdc():.0f})"
                             )
                         else:
@@ -336,11 +338,6 @@ class PolymarketBot:
                     if edge_result.has_edge:
                         markets_with_edge += 1
                     self._append_signal_feed(market, edge_result, entered=actually_entered)
-                    if not edge_result.has_edge:
-                        logger.debug(
-                            f"No edge — {market.question[:50]} | "
-                            f"Signals: {edge_result.signal_count}"
-                        )
 
             except Exception as e:
                 logger.error(f"Scan loop error: {e}", exc_info=True)

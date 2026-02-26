@@ -67,10 +67,17 @@ class StrategyRouter:
         asset = detect_asset(market.question)
         market.asset = asset
 
-        # Get live Binance data
+        # Get live price feed (Kraken/Coinbase/CoinGecko)
         spot_price = binance_feed.get_price(asset)
         pct_move = binance_feed.get_pct_move_from_window_open(asset)
         window_open_price = binance_feed.get_window_open_price(asset)
+        # Log price data for every market every scan
+        if spot_price is None:
+            logger.info(f"[{asset}] PRICE: spot=None (feed not ready?) — momentum/strategy may fail")
+        else:
+            pct_str = f"{pct_move:.2%}" if pct_move is not None else "None"
+            win_str = f"${window_open_price:.2f}" if window_open_price else "None"
+            logger.info(f"[{asset}] PRICE: spot=${spot_price:.2f} pct_move={pct_str} window_open={win_str}")
 
         # BTC neutral or up for SOL squeeze
         btc_pct = binance_feed.get_pct_move_from_window_open("BTC")
