@@ -10,7 +10,8 @@ Exit conditions (first to trigger wins):
 import asyncio
 import csv
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable, Dict, Optional
 
 from config import BotConfig
@@ -216,9 +217,17 @@ class PositionManager:
 
     # ── Trade Logging ─────────────────────────────────────────────────────────
 
+    def _get_trade_log_path(self) -> Path:
+        """Resolve trades.csv to project root so VM always writes to correct path."""
+        p = Path(self.config.TRADE_LOG_FILE)
+        if p.is_absolute():
+            return p
+        return Path(__file__).resolve().parent / p
+
     def _init_trade_log(self):
         try:
-            with open(self.config.TRADE_LOG_FILE, "a", newline="") as f:
+            path = self._get_trade_log_path()
+            with open(path, "a", newline="") as f:
                 writer = csv.writer(f)
                 if f.tell() == 0:
                     writer.writerow([
@@ -239,7 +248,8 @@ class PositionManager:
                 (pos.exit_time - pos.entry_time).total_seconds()
                 if pos.exit_time else None
             )
-            with open(self.config.TRADE_LOG_FILE, "a", newline="") as f:
+            path = self._get_trade_log_path()
+            with open(path, "a", newline="") as f:
                 writer = csv.writer(f)
                 writer.writerow([
                     pos.condition_id,
@@ -256,6 +266,25 @@ class PositionManager:
                     reason,
                     getattr(pos, "strategy_name", "") or "",
                 ])
+            # Log summary so user can confirm trades are recorded
+            try:
+                today = datetime.now(timezone.utc).date().isoformat()
+                trades_today = 0
+                today_pnl = 0.0
+                if path.exists():
+                    with open(path, newline="") as rf:
+                        for row in csv.DictReader(rf):
+                            et = row.get("exit_time", "")
+                            if et.startswith(today):
+                                trades_today += 1
+                                p = row.get("pnl_usdc")
+                                if p and str(p).strip():
+                                    today_pnl += float(p)
+                logger.info(
+                    f"TRADE COMPLETE | Total trades today: {trades_today} | Session P&L: ${today_pnl:+.2f}"
+                )
+            except Exception as e:
+                logger.debug(f"Trade summary failed: {e}")
         except Exception as e:
             logger.warning(f"Trade log write failed: {e}")
 
