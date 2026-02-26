@@ -89,9 +89,10 @@ class OrderExecutor:
         half = self.config.MAKER_SPREAD_TARGET / 2
         yes_price = round(max(0.01, mid - half), 4)
         no_price = round(max(0.01, (1 - mid) - half), 4)
+        max_per_trade = getattr(self.config, "MAX_POSITION_SIZE_USD", self.config.MAX_BET_SIZE)
         size_usdc = min(
             self.config.MAKER_MAX_POSITION_SIZE,
-            self.config.MAX_BET_SIZE,
+            max_per_trade,
         )
         yes_shares = round(size_usdc / yes_price, 4)
         no_shares = round(size_usdc / no_price, 4)

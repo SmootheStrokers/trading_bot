@@ -641,10 +641,11 @@ class EdgeFilter:
             frac = base_pct
         raw_size = frac * self.config.BANKROLL
 
-        # Clamp to configured limits
+        # Clamp to configured limits (MAX_POSITION_SIZE_USD caps per-trade; allows many positions)
+        max_size = getattr(self.config, "MAX_POSITION_SIZE_USD", self.config.MAX_BET_SIZE)
         kelly_size = max(
             self.config.MIN_BET_SIZE,
-            min(raw_size, self.config.MAX_BET_SIZE)
+            min(raw_size, max_size)
         )
 
         signal_fired = kelly_edge >= self.config.MIN_KELLY_EDGE

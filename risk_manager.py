@@ -150,10 +150,11 @@ class RiskManager:
             logger.info("RiskManager: new day — daily counters reset")
 
     def get_max_position_size(self, bankroll: float) -> float:
-        """Max USDC per trade (per-trade loss limit). Capped by config MAX_BET_SIZE."""
+        """Max USDC per trade (per-trade loss limit). Capped by MAX_POSITION_SIZE_USD."""
         per_trade_pct = getattr(self.config, "PER_TRADE_MAX_LOSS_PCT", 0.10)
         cap_from_risk = bankroll * per_trade_pct
-        return min(cap_from_risk, self.config.MAX_BET_SIZE)
+        max_position = getattr(self.config, "MAX_POSITION_SIZE_USD", self.config.MAX_BET_SIZE)
+        return min(cap_from_risk, max_position)
 
     def get_state(self, bankroll: float) -> dict:
         """For dashboard: current risk state."""

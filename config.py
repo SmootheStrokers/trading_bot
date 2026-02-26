@@ -34,9 +34,10 @@ class BotConfig:
     BANKROLL: float = float(os.getenv("BANKROLL", "1000.0"))       # Total capital in USDC
     MAX_KELLY_FRACTION: float = 0.25   # Cap Kelly bet at 25% of full Kelly (safety)
     MIN_BET_SIZE: float = 5.0          # Minimum order in USDC
-    MAX_BET_SIZE: float = 100.0        # Hard cap per trade in USDC
-    MAX_POSITIONS: int = 5             # Max simultaneous open positions
-    MAX_PORTFOLIO_RISK: float = 0.30   # Never risk more than 30% of bankroll at once
+    MAX_BET_SIZE: float = 100.0        # Hard cap per trade in USDC (legacy)
+    MAX_POSITION_SIZE_USD: float = float(os.getenv("MAX_POSITION_SIZE_USD", "25.0"))  # Cap per trade ($20-25 = 2-2.5% of $1k)
+    MAX_POSITIONS: int = int(os.getenv("MAX_POSITIONS", "20"))  # Allow ~$500/$25 = 20 positions at 50% risk
+    MAX_PORTFOLIO_RISK: float = float(os.getenv("MAX_PORTFOLIO_RISK_PCT", "0.50"))  # 50% bankroll at risk across all positions
 
     # ── $1000/Day Goal & Risk Limits ─────────────────────────────────────────
     DAILY_PROFIT_GOAL_USD: float = float(os.getenv("DAILY_PROFIT_GOAL_USD", "1000.0"))
@@ -45,7 +46,7 @@ class BotConfig:
     MAX_TRADES_PER_HOUR: int = 20       # Rate limit to avoid overtrading
     LOSS_STREAK_REQUIRE_HIGHER_EDGE: int = 2   # After N consecutive losses, require +2% edge
     POSITION_SIZING_MODE: str = os.getenv("POSITION_SIZING_MODE", "fractional_kelly")  # kelly | fractional_kelly | bankroll_pct
-    KELLY_FRACTION: float = float(os.getenv("KELLY_FRACTION", "0.5"))  # 0.5 = half-Kelly (when fractional_kelly)
+    KELLY_FRACTION: float = float(os.getenv("KELLY_FRACTION", "0.25"))  # 0.25 = quarter-Kelly (conservative sizing)
 
     # ── Edge Filter (core profit gate) ──────────────────────────────────────
     MIN_EDGE_SIGNALS: int = int(os.getenv("MIN_EDGE_SIGNALS", "2"))  # Require 2 of 4 signals (was 3)

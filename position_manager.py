@@ -41,6 +41,9 @@ class PositionManager:
     # ── Public Interface ──────────────────────────────────────────────────────
 
     def has_position(self, condition_id: str) -> bool:
+        """True only if we have an OPEN position in this market. Each 15-min window has a unique
+        condition_id, so expired positions don't block new windows. Allows multiple positions
+        per asset (e.g. BTC window 1, BTC window 2) across different market windows."""
         return condition_id in self.positions and self.positions[condition_id].is_open
 
     def at_capacity(self) -> bool:
