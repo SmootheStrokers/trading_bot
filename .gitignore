@@ -15,6 +15,7 @@ venv/
 *.log
 bot.log
 trades.csv
+trades_backup.csv
 bot_state.json
 session_start.json
 

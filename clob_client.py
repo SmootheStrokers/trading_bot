@@ -53,8 +53,10 @@ class ClobClient:
         return self._session
 
     def _sign_request(self, method: str, path: str, body: str = "") -> Dict[str, str]:
-        """Generate CLOB API auth headers using HMAC-SHA256 (Polymarket L2 spec)."""
-        timestamp = str(int(time.time() * 1000))
+        """Generate CLOB API auth headers using HMAC-SHA256 (Polymarket L2 spec).
+        Timestamp must be UNIX seconds (matches py-clob-client and Polymarket docs).
+        """
+        timestamp = str(int(time.time()))
         message = str(timestamp) + method.upper() + path
         if body:
             message += str(body).replace("'", '"')
@@ -72,10 +74,12 @@ class ClobClient:
             "POLY-SIGNATURE": signature,
             "Content-Type": "application/json",
         }
-        # POLY_ADDRESS (Polygon signer/funder) required for authenticated endpoints
-        addr = getattr(self.config, "PROXY_WALLET", None)
+        # POLY-ADDRESS required for all L2 authenticated endpoints (Polymarket docs)
+        addr = getattr(self.config, "SIGNER_ADDRESS", None) or getattr(self.config, "PROXY_WALLET", None)
         if addr:
             headers["POLY-ADDRESS"] = addr if addr.startswith("0x") else f"0x{addr}"
+        else:
+            logger.warning("POLY-ADDRESS missing — set POLY_ADDRESS env or PROXY_WALLET for authenticated requests")
         return headers
 
     def _is_rate_limited(self, e: Exception) -> bool:
@@ -231,8 +235,12 @@ class ClobClient:
     # ── Account ───────────────────────────────────────────────────────────────
 
     async def get_balance(self) -> Dict:
-        """Get USDC balance and allowance. Uses /balance-allowance (CLOB API)."""
-        return await self._get("/balance-allowance")
+        """Get USDC balance and allowance. Uses /balance-allowance (CLOB API).
+        Requires signature_type: 0=EOA, 1=POLY_PROXY (when PROXY_WALLET set), 2=GNOSIS_SAFE.
+        """
+        sig_type = 1 if getattr(self.config, "PROXY_WALLET", None) else 0
+        params = {"signature_type": str(sig_type)}
+        return await self._get("/balance-allowance", params=params)
 
     async def get_positions(self) -> List[Dict]:
         """Get current token positions from the Polymarket Data API."""

@@ -20,6 +20,8 @@ class BotConfig:
     CLOB_API_URL: str = os.getenv("CLOB_API_URL", "https://clob.polymarket.com")
     PRIVATE_KEY: str = os.getenv("POLY_PRIVATE_KEY", "")          # Wallet private key
     PROXY_WALLET: Optional[str] = os.getenv("PROXY_WALLET")       # For positions lookup (Data API)
+    # POLY_ADDRESS (signer/funder): derived from PRIVATE_KEY, or set via env when using manual API keys
+    SIGNER_ADDRESS: Optional[str] = os.getenv("POLY_ADDRESS")     # Used for L2 auth header; derived if missing
     API_KEY: str = os.getenv("POLY_API_KEY", "")                   # CLOB API key
     API_SECRET: str = os.getenv("POLY_API_SECRET", "")
     API_PASSPHRASE: str = os.getenv("POLY_API_PASSPHRASE", "")
@@ -42,8 +44,9 @@ class BotConfig:
     # ── $1000/Day Goal & Risk Limits ─────────────────────────────────────────
     DAILY_PROFIT_GOAL_USD: float = float(os.getenv("DAILY_PROFIT_GOAL_USD", "1000.0"))
     DAILY_LOSS_LIMIT_PCT: float = 0.20  # Hard stop: pause all trading if daily loss >= 20% bankroll
+    RESET_DAILY_LOSS_PAUSE: bool = os.getenv("RESET_DAILY_LOSS_PAUSE", "false").lower() in ("true", "1", "yes")
     PER_TRADE_MAX_LOSS_PCT: float = 0.10  # Max 10% of bankroll per trade (caps position size)
-    MAX_TRADES_PER_HOUR: int = 20       # Rate limit to avoid overtrading
+    MAX_TRADES_PER_HOUR: int = int(os.getenv("MAX_TRADES_PER_HOUR", "20"))  # Rate limit; set higher to allow more
     LOSS_STREAK_REQUIRE_HIGHER_EDGE: int = 2   # After N consecutive losses, require +2% edge
     POSITION_SIZING_MODE: str = os.getenv("POSITION_SIZING_MODE", "fractional_kelly")  # kelly | fractional_kelly | bankroll_pct
     KELLY_FRACTION: float = float(os.getenv("KELLY_FRACTION", "0.25"))  # 0.25 = quarter-Kelly (conservative sizing)

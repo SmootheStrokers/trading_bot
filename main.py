@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from config import BotConfig
+from auth import ensure_clob_creds
 from clob_client import ClobClient
 from market_scanner import MarketScanner
 from edge_filter import EdgeFilter
@@ -593,6 +594,16 @@ class PolymarketBot:
 
 
 if __name__ == "__main__":
+    # Live mode: always derive CLOB creds from POLY_PRIVATE_KEY. Builder Keys (from
+    # polymarket.com/settings?tab=builder) are for attribution only and cause 401.
+    live_mode = not config.PAPER_TRADING and not getattr(config, "DRY_RUN", False)
+    if live_mode and not ensure_clob_creds(config, force_derive=True):
+            logger.error(
+                "Live trading requires CLOB API credentials. Set POLY_API_KEY/SECRET/PASSPHRASE, "
+                "or leave them empty to derive from POLY_PRIVATE_KEY. "
+                "Builder Keys do NOT work for CLOB auth — credentials must be derived from your wallet key."
+            )
+            sys.exit(1)
     bot = PolymarketBot(config)
     try:
         asyncio.run(bot.run())

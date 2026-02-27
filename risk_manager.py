@@ -98,15 +98,22 @@ class RiskManager:
         Checks: daily loss limit, max trades/hour, trading paused.
         """
         if self._trading_paused:
-            return False, f"Trading paused: {self._pause_reason}"
+            # RESET_DAILY_LOSS_PAUSE: user opts in to clear pause (e.g. after clearing state)
+            if getattr(self.config, "RESET_DAILY_LOSS_PAUSE", False):
+                self._trading_paused = False
+                self._pause_reason = ""
+                logger.info("RiskManager: RESET_DAILY_LOSS_PAUSE=true — cleared daily loss pause")
+            else:
+                return False, f"Trading paused: {self._pause_reason}"
 
-        daily_pnl = self._load_daily_pnl(bankroll)
-        loss_limit = bankroll * (getattr(self.config, "DAILY_LOSS_LIMIT_PCT", 0.20))
-        if daily_pnl <= -loss_limit:
-            self._trading_paused = True
-            self._pause_reason = f"Daily loss limit reached (${abs(daily_pnl):.2f} >= ${loss_limit:.2f})"
-            logger.warning(f"RISK: {self._pause_reason} — all trading paused until next day")
-            return False, self._pause_reason
+        if not getattr(self.config, "RESET_DAILY_LOSS_PAUSE", False):
+            daily_pnl = self._load_daily_pnl(bankroll)
+            loss_limit = bankroll * (getattr(self.config, "DAILY_LOSS_LIMIT_PCT", 0.20))
+            if daily_pnl <= -loss_limit:
+                self._trading_paused = True
+                self._pause_reason = f"Daily loss limit reached (${abs(daily_pnl):.2f} >= ${loss_limit:.2f})"
+                logger.warning(f"RISK: {self._pause_reason} — all trading paused until next day")
+                return False, self._pause_reason
 
         max_per_hour = getattr(self.config, "MAX_TRADES_PER_HOUR", 20)
         self._reset_hourly_count_if_needed()
