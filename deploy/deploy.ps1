@@ -9,7 +9,7 @@
 param(
     [Parameter(Mandatory=$true)]
     [string]$RepoUrl,
-    [string]$VmIp = "35.246.236.160",
+    [string]$VmIp = "34.95.194.231",
     [string]$SshUser = "williamreel07",
     [string]$IdentityFile = ""   # e.g. "$env:USERPROFILE\.ssh\id_ed25519" — leave empty for default ~/.ssh/id_rsa or id_ed25519
 )

@@ -627,13 +627,17 @@ class EdgeFilter:
             implied_prob = 1.0 - mid_price
             price = 1.0 - mid_price
 
-        # Win probability: when OB strongly passes, use OB ratio as our estimate
+        # Win probability: OB imbalance adds a scaled boost to implied prob.
+        # We do NOT use bid_ratio as win_prob directly — a 55% OB ratio doesn't mean
+        # 55% win probability; it means ~2-3% edge above the current implied price.
         if ob_signal and bid_ratio > 0.52 and side == Side.YES:
-            estimated_prob = min(bid_ratio, 0.95)
-            win_prob_source = f"OB bid_ratio={bid_ratio:.2%}"
+            ob_edge = (bid_ratio - 0.50) * 0.4  # 55% ratio → +2%, 65% ratio → +6%
+            estimated_prob = min(implied_prob + ob_edge + edge_boost, 0.95)
+            win_prob_source = f"implied+OB+boost={implied_prob:.2%}+{ob_edge:.2%}+{edge_boost:.2%}"
         elif ob_signal and ask_ratio > 0.52 and side == Side.NO:
-            estimated_prob = min(ask_ratio, 0.95)
-            win_prob_source = f"OB ask_ratio={ask_ratio:.2%}"
+            ob_edge = (ask_ratio - 0.50) * 0.4  # Same scaling for NO side
+            estimated_prob = min(implied_prob + ob_edge + edge_boost, 0.95)
+            win_prob_source = f"implied+OB+boost={implied_prob:.2%}+{ob_edge:.2%}+{edge_boost:.2%}"
         else:
             estimated_prob = min(implied_prob + edge_boost, 0.95)
             win_prob_source = f"implied+boost={implied_prob:.2%}+{edge_boost:.2%}"

@@ -100,7 +100,7 @@ class StrategyRouter:
             spot_price=spot_price,
             window_open_price=window_open_price,
             pct_move=pct_move,
-            funding_rate=funding_rate if asset == "SOL" else None,
+            funding_rate=funding_rate,  # Pass for all assets; edge_filter uses it for BTC/ETH too
             btc_is_neutral_or_up=btc_is_neutral_or_up,
             btc_price_history=btc_price_history,
             bankroll=bankroll,
